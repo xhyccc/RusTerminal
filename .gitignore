@@ -1,0 +1,8 @@
+src-tauri/target
+src-tauri/Cargo.lock
+node_modules/
+dist/
+python_agent/workspace/temp_strategy.py
+python_agent/workspace/report.json
+*.pyc
+__pycache__/

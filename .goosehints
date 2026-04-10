@@ -1,0 +1,74 @@
+# .goosehints — Project context for the goose AI agent
+# https://github.com/aaif-goose/goose
+#
+# goose reads this file automatically to understand the repository before
+# acting.  Keep it concise and factual.
+
+## Project: AI Quant Terminal
+
+A three-layer quantitative trading terminal:
+
+- **Presentation (Vue 3 + Tauri)** — `src/` — dark "hacker" UI with xterm.js
+  terminal, ECharts backtest charts, and strategy monitor cards.
+- **Host / Bridge (Tauri / Rust)** — `src-tauri/` — market data polling engine,
+  desktop notifications, and Python/goose subprocess management.
+- **Agent Sandbox (Python + goose)** — `python_agent/` — autonomous strategy
+  generation loop.
+
+## Agent recipe
+
+The primary entry point for the agent is:
+
+    python_agent/quant_strategy.yaml
+
+Run it directly:
+
+    goose run --recipe python_agent/quant_strategy.yaml \
+              --params idea="5日均线与20日均线金叉策略" \
+              --no-session
+
+## Key files
+
+| Path | Purpose |
+|------|---------|
+| `python_agent/quant_strategy.yaml` | goose recipe — main agent brain |
+| `python_agent/agent_loop.py` | CLI wrapper: tries goose, then Python fallback |
+| `python_agent/template_bt.py` | Backtrader SMA-crossover template (fallback) |
+| `python_agent/data_fetcher.py` | akshare data-fetch helpers |
+| `python_agent/workspace/` | Generated strategies, reports, temp files |
+| `python_agent/workspace/strategies.json` | Active monitoring rules (JSON array) |
+| `python_agent/workspace/report.json` | Latest backtest report |
+| `src-tauri/src/agent_runner.rs` | Rust: spawns goose subprocess, streams logs |
+| `src-tauri/src/market_engine.rs` | Rust: polls sina finance, checks conditions |
+| `src-tauri/src/notifier.rs` | Rust: desktop notifications via notify-rust |
+
+## Strategy script requirements
+
+Any file in `python_agent/workspace/temp_strategy.py` must:
+
+1. Use `akshare` (`ak.stock_zh_a_hist`) to fetch A-share data.
+2. Implement a complete Backtrader strategy.
+3. Backtest period: 2022-01-01 → 2023-12-31, initial cash 100 000 CNY.
+4. Print **one** JSON object at the end:
+   `sharpe_ratio`, `max_drawdown_pct`, `total_return_pct`, `num_trades`,
+   `final_portfolio_value`, `equity_curve`.
+5. Use `print(json.dumps(metrics))` — nothing else to stdout.
+
+## Log prefixes (parsed by xterm.js frontend)
+
+| Prefix | Meaning |
+|--------|---------|
+| `[AGENT_THINKING]` | Reasoning / planning |
+| `[AGENT_EXECUTING]` | About to run a command |
+| `[AGENT_SUCCESS]` | Step completed |
+| `[AGENT_ERROR]` | Failure (with reason) |
+| `[AGENT_FIXING]` | Retrying / applying a fix |
+
+## Environment variables
+
+| Variable | Purpose |
+|----------|---------|
+| `GOOSE_PROVIDER` | AI provider (`openai`, `anthropic`, `ollama`, …) |
+| `GOOSE_MODEL` | Model name (e.g. `gpt-4o`, `claude-3-5-sonnet`) |
+| `OPENAI_API_KEY` | Required when `GOOSE_PROVIDER=openai` |
+| `ANTHROPIC_API_KEY` | Required when `GOOSE_PROVIDER=anthropic` |
