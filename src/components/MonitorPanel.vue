@@ -152,7 +152,7 @@ onMounted(async () => {
   } catch { /* browser mode */ }
 
   // Poll every 30 seconds
-  refreshTimer = setInterval(refresh, 30_000)
+  refreshTimer = setInterval(refresh, 30000)
 })
 
 onUnmounted(() => {

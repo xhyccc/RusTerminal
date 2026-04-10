@@ -50,7 +50,7 @@ async fn market_loop(app_handle: AppHandle, running: Arc<AtomicBool>) {
         let active: Vec<&Strategy> = strategies.iter().filter(|s| s.enabled).collect();
 
         let heartbeat = serde_json::json!({
-            "timestamp": chrono_now(),
+            "timestamp": timestamp_now(),
             "active_strategies": active.len(),
         });
         app_handle
@@ -59,7 +59,7 @@ async fn market_loop(app_handle: AppHandle, running: Arc<AtomicBool>) {
 
         for strat in active {
             let title = "AI Quant Terminal";
-            let body = format!("策略监控中: {}", &strat.idea[..strat.idea.len().min(60)]);
+            let body = format!("策略监控中: {}", strat.idea.chars().take(60).collect::<String>());
             // Only notify the first time as a demo; real logic would check price conditions.
             if strat.last_trigger.is_none() {
                 send_alert(title, &body);
@@ -68,8 +68,7 @@ async fn market_loop(app_handle: AppHandle, running: Arc<AtomicBool>) {
     }
 }
 
-fn chrono_now() -> String {
-    // Use std time to avoid adding chrono dependency
+fn timestamp_now() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)

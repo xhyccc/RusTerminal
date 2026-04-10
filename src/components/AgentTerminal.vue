@@ -70,7 +70,7 @@ onUnmounted(() => {
   term?.dispose()
 })
 
-/** Apply ANSI colour codes based on log prefix. */
+/** Apply ANSI color codes based on log prefix. */
 function colorize(line) {
   if (line.includes('[AGENT_THINKING]'))   return `\x1b[36m${line}\x1b[0m`
   if (line.includes('[AGENT_EXECUTING]'))  return `\x1b[33m${line}\x1b[0m`

@@ -88,7 +88,7 @@ def _extract_code(raw: str) -> str:
         if line.startswith("```"):
             in_block = not in_block
             continue
-        if in_block or not any(raw.startswith("```") for raw in ["```python", "```"]):
+        if in_block or not any(fence.startswith("```") for fence in ["```python", "```"]):
             result.append(line)
     # If no fences were found, return entire text
     if "```" not in raw:
@@ -155,7 +155,7 @@ def _fallback_strategy(idea: str) -> str:
 # ---------------------------------------------------------------------------
 
 def run_agent(idea: str):
-    print(f"[AGENT_THINKING] Initialising agent for idea: {idea}")
+    print(f"[AGENT_THINKING] Initializing agent for idea: {idea}")
 
     llm = _build_llm()
     if llm is None:
@@ -223,7 +223,7 @@ def run_agent(idea: str):
             continue
 
         if not success:
-            last_error = stderr[-3000:]  # keep last 3 k chars to avoid huge prompts
+            last_error = stderr[-3000:]  # keep last 3K chars to avoid huge prompts
             print(f"[AGENT_ERROR] Script exited with error:\n{stderr[-500:]}")
             continue
 
