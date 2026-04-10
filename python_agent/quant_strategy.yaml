@@ -1,0 +1,147 @@
+version: 1.0.0
+title: AI Quant Strategy Generator
+description: >
+  Autonomous quantitative strategy generation for Chinese A-share markets.
+  Given a natural-language trading idea, this recipe generates a complete
+  Backtrader Python script, runs it, self-heals any errors, and outputs
+  a JSON performance report plus a strategies.json monitoring config.
+author:
+  contact: ai-quant-terminal
+
+parameters:
+  - key: idea
+    input_type: string
+    requirement: required
+    description: "Natural-language description of the trading strategy (e.g. '5日均线与20日均线金叉策略，标的为平安银行')"
+
+  - key: workspace_dir
+    input_type: string
+    requirement: optional
+    default: "python_agent/workspace"
+    description: "Directory where generated code and reports are written"
+
+  - key: max_retries
+    input_type: string
+    requirement: optional
+    default: "5"
+    description: "Maximum self-healing retry attempts when the script errors"
+
+extensions:
+  - type: builtin
+    name: developer
+    display_name: Developer
+    timeout: 300
+    bundled: true
+    description: >
+      File operations (create/read/edit) and shell command execution.
+      Used to write Python strategy files, run backtests, and save reports.
+
+instructions: |
+  You are an expert quantitative analyst specialising in Chinese A-share markets.
+  You work autonomously: generate code → run it → fix errors → report results.
+
+  ── LOGGING PROTOCOL (mandatory, every step) ──────────────────────────────────
+  Every meaningful action MUST start with one of these prefixes so the terminal
+  UI can parse and colour-code your progress:
+    [AGENT_THINKING]   — reasoning, planning, or analysis
+    [AGENT_EXECUTING]  — before running any shell command
+    [AGENT_SUCCESS]    — a step completed without error
+    [AGENT_ERROR]      — something failed (include a brief reason)
+    [AGENT_FIXING]     — retrying / applying a fix
+
+  ── STRATEGY SCRIPT REQUIREMENTS ──────────────────────────────────────────────
+  The generated Python file MUST:
+  1. Import and use `akshare` (e.g. `ak.stock_zh_a_hist`) to fetch price data.
+  2. Implement the trading logic described in the `idea` parameter.
+  3. Run a full Backtrader backtest (start=2022-01-01, end=2023-12-31, cash=100 000 CNY).
+  4. At the very end print ONE JSON object — nothing else — with these exact keys:
+       sharpe_ratio          (float | null)
+       max_drawdown_pct      (float, e.g. 12.5 means 12.5 %)
+       total_return_pct      (float, percentage)
+       num_trades            (int)
+       final_portfolio_value (float)
+       equity_curve          (list of {"date":"YYYY-MM-DD","value":float})
+  5. Use `import json; print(json.dumps(metrics))` — no other stdout output.
+  6. Be fully self-contained and runnable with `python3 <file>`.
+
+  ── REPORT FORMAT ─────────────────────────────────────────────────────────────
+  report.json:
+    { "idea": "<idea>", "timestamp": "<ISO>", "metrics": { … } }
+
+  strategies.json (append — do NOT overwrite existing entries):
+    Each entry: { "id":"<uuid4>","idea":"<idea>","timestamp":"<ISO>",
+                  "metrics":{…},"enabled":true,"last_trigger":null }
+
+prompt: |
+  [AGENT_THINKING] Goose quant agent starting. Strategy idea: {{ idea }}
+
+  Work through the following numbered steps.  Print the required log prefix
+  at the start of every shell command or major decision.
+
+  ════════════════════════════════════════════════════════════════
+  STEP 1 — Generate strategy code
+  ════════════════════════════════════════════════════════════════
+  [AGENT_THINKING] Designing Backtrader strategy for: {{ idea }}
+
+  Write a complete, self-contained Python script to
+  {{ workspace_dir }}/temp_strategy.py that satisfies every rule in the
+  STRATEGY SCRIPT REQUIREMENTS above.
+
+  Use the `developer` text_editor tool to create the file.
+
+  ════════════════════════════════════════════════════════════════
+  STEP 2 — Run the strategy
+  ════════════════════════════════════════════════════════════════
+  [AGENT_EXECUTING] python3 {{ workspace_dir }}/temp_strategy.py
+
+  Run the script with bash.  Capture both stdout and stderr.
+
+  ════════════════════════════════════════════════════════════════
+  STEP 3 — Evaluate result
+  ════════════════════════════════════════════════════════════════
+  • If exit code is 0 AND the last line of stdout is valid JSON containing
+    the required keys → JUMP TO STEP 5.
+  • Otherwise → STEP 4 (self-heal).
+
+  ════════════════════════════════════════════════════════════════
+  STEP 4 — Self-heal (repeat up to {{ max_retries }} times)
+  ════════════════════════════════════════════════════════════════
+  [AGENT_FIXING] Attempt N/{{ max_retries }} — analysing error …
+
+  a. Read the error traceback from stderr.
+  b. Identify the root cause.
+  c. Overwrite {{ workspace_dir }}/temp_strategy.py with the corrected code.
+  d. Re-run (STEP 2) and re-evaluate (STEP 3).
+
+  If all {{ max_retries }} retries are exhausted, print:
+  [AGENT_ERROR] All retries exhausted. Could not produce a valid strategy.
+  … and stop.
+
+  ════════════════════════════════════════════════════════════════
+  STEP 5 — Save outputs
+  ════════════════════════════════════════════════════════════════
+  [AGENT_SUCCESS] Strategy executed successfully!
+
+  a. Parse the JSON metrics from stdout.
+
+  b. Write {{ workspace_dir }}/report.json:
+     {
+       "idea": "{{ idea }}",
+       "timestamp": "<current ISO datetime>",
+       "metrics": <parsed metrics object>
+     }
+
+  c. Read {{ workspace_dir }}/strategies.json (create [] if missing).
+     Append a new entry:
+     {
+       "id": "<python uuid4>",
+       "idea": "{{ idea }}",
+       "timestamp": "<current ISO datetime>",
+       "metrics": <parsed metrics object>,
+       "enabled": true,
+       "last_trigger": null
+     }
+     Write the updated array back.
+
+  d. Print the summary line:
+  [AGENT_SUCCESS] Report saved → Sharpe: <sharpe_ratio> | Max DD: <max_drawdown_pct>% | Return: <total_return_pct>%
