@@ -597,7 +597,7 @@ These are checked **before** `LLM_API_KEY` for their respective providers:
 
 | Provider | Default model | API base URL |
 |---|---|---|
-| `openai` | `gpt-4o-mini` | `https://api.openai.com/v1` |
+| `openai` | `gpt-4o-mini` | OpenAI SDK default (`https://api.openai.com/v1`) |
 | `kimi` | `moonshot-v1-8k` | `https://api.moonshot.cn/v1` |
 | `glm` | `glm-4-flash` | `https://open.bigmodel.cn/api/paas/v4` |
 | `siliconflow` | `Qwen/Qwen2.5-7B-Instruct` | `https://api.siliconflow.cn/v1` |

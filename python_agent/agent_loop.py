@@ -26,6 +26,7 @@ import sys
 import uuid
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -207,7 +208,7 @@ def _build_llm():
 
     try:
         from langchain_openai import ChatOpenAI
-        kwargs: dict = {"model": model, "temperature": 0.2, "api_key": api_key}
+        kwargs: dict[str, Any] = {"model": model, "temperature": 0.2, "api_key": api_key}
         if base_url:
             kwargs["base_url"] = base_url
         return ChatOpenAI(**kwargs)
