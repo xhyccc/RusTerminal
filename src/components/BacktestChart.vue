@@ -39,13 +39,19 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted, watch } from 'vue'
+import { ref, watch, onMounted, onUnmounted } from 'vue'
 import * as echarts from 'echarts'
 import { listen } from '@tauri-apps/api/event'
+
+const props = defineProps({
+  /** When set, display this strategy instead of the latest report.json. */
+  selectedStrategy: { type: Object, default: null },
+})
 
 const chartEl = ref(null)
 const metrics = ref(null)
 const equityCurve = ref([])
+const chartTitle = ref('回测结果')
 
 let chart = null
 let unlisten = null

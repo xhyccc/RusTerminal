@@ -74,6 +74,13 @@
           </div>
         </div>
 
+        <!-- Mini sparkline -->
+        <div
+          v-if="strat.metrics?.equity_curve?.length"
+          :ref="el => setSparklineRef(el, strat.id)"
+          class="w-full h-14 mt-1"
+        />
+
         <!-- Footer -->
         <div class="flex items-center justify-between text-xs text-terminal-dimgreen opacity-50 mt-1">
           <span>{{ formatDate(strat.timestamp) }}</span>
@@ -81,11 +88,21 @@
             {{ strat.last_trigger ? '最后触发: ' + formatDate(strat.last_trigger) : '从未触发' }}
           </span>
         </div>
-        <div class="flex items-center gap-1 text-xs">
-          <span :class="strat.enabled ? 'text-terminal-green' : 'text-terminal-dimgreen opacity-40'">●</span>
-          <span :class="strat.enabled ? 'text-terminal-green' : 'text-terminal-dimgreen opacity-40'">
-            {{ strat.enabled ? '监控中' : '已停用' }}
-          </span>
+        <div class="flex items-center justify-between text-xs mt-1">
+          <div class="flex items-center gap-1">
+            <span :class="strat.enabled ? 'text-terminal-green' : 'text-terminal-dimgreen opacity-40'">●</span>
+            <span :class="strat.enabled ? 'text-terminal-green' : 'text-terminal-dimgreen opacity-40'">
+              {{ strat.enabled ? '监控中' : '已停用' }}
+            </span>
+          </div>
+          <!-- View full chart button -->
+          <button
+            @click="$emit('strategy-selected', strat)"
+            class="px-2 py-0.5 border border-terminal-border text-terminal-dimgreen rounded
+                   hover:border-terminal-green hover:text-terminal-green transition-colors"
+          >
+            📈 查看回测
+          </button>
         </div>
       </div>
     </div>
@@ -93,13 +110,89 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, watch, nextTick, onMounted, onUnmounted } from 'vue'
+import * as echarts from 'echarts'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
+
+defineEmits(['strategy-selected'])
 
 const strategies = ref([])
 let unlisten = null
 let refreshTimer = null
+
+// ── Sparkline chart management ────────────────────────────────────────────────
+const sparklineRefs = {}    // id → DOM element (populated by template ref callbacks)
+const sparklineInsts = {}   // id → echarts instance
+
+function setSparklineRef(el, id) {
+  if (el) {
+    sparklineRefs[id] = el
+  }
+}
+
+function buildSparklineOption(curve) {
+  const values = curve.map((p) => p.value)
+  const isPositive = values[values.length - 1] >= values[0]
+  const color = isPositive ? '#00ff41' : '#ff4141'
+  return {
+    animation: false,
+    grid: { top: 2, right: 2, bottom: 2, left: 2 },
+    xAxis: { type: 'category', show: false, data: curve.map((p) => p.date) },
+    yAxis: { type: 'value', show: false, scale: true },
+    series: [
+      {
+        data: values,
+        type: 'line',
+        smooth: true,
+        symbol: 'none',
+        lineStyle: { color, width: 1.5 },
+        areaStyle: {
+          color: {
+            type: 'linear',
+            x: 0, y: 0, x2: 0, y2: 1,
+            colorStops: [
+              { offset: 0, color: color.replace(')', ',0.3)').replace('rgb', 'rgba') },
+              { offset: 1, color: color.replace(')', ',0.02)').replace('rgb', 'rgba') },
+            ],
+          },
+        },
+      },
+    ],
+  }
+}
+
+async function initSparklines() {
+  await nextTick()
+  for (const strat of strategies.value) {
+    const curve = strat.metrics?.equity_curve
+    if (!curve?.length) continue
+
+    const el = sparklineRefs[strat.id]
+    if (!el) continue
+
+    // Dispose existing instance before re-creating to avoid stale references.
+    if (sparklineInsts[strat.id]) {
+      sparklineInsts[strat.id].dispose()
+    }
+    const inst = echarts.init(el, null, { renderer: 'canvas' })
+    inst.setOption(buildSparklineOption(curve))
+    sparklineInsts[strat.id] = inst
+  }
+}
+
+function disposeSparklines() {
+  for (const inst of Object.values(sparklineInsts)) {
+    inst.dispose()
+  }
+  Object.keys(sparklineInsts).forEach((k) => delete sparklineInsts[k])
+  Object.keys(sparklineRefs).forEach((k) => delete sparklineRefs[k])
+}
+
+// Re-init sparklines whenever strategies list updates.
+watch(strategies, () => initSparklines(), { flush: 'post' })
+
+// ── Data helpers ──────────────────────────────────────────────────────────────
 
 function fmt(v) {
   if (v === null || v === undefined) return '--'
@@ -158,5 +251,6 @@ onMounted(async () => {
 onUnmounted(() => {
   unlisten?.()
   clearInterval(refreshTimer)
+  disposeSparklines()
 })
 </script>
