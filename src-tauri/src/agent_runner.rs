@@ -104,13 +104,19 @@ fn first_env(vars: &[&str]) -> Option<String> {
 fn llm_env_for_goose() -> Vec<(String, String)> {
     let cfg = load_app_config();
 
-    // Helper: env var → config.yaml fallback → empty string
+    // Helper: env var → config.yaml fallback → empty string.
+    // Avoids unnecessary allocations: only trims/clones when a non-empty value exists.
     let resolve = |env_var: &str, yaml_val: &str| -> String {
-        std::env::var(env_var)
-            .unwrap_or_default()
-            .trim()
-            .to_string()
-            .or_if_empty(yaml_val.trim().to_string())
+        let from_env = std::env::var(env_var).unwrap_or_default();
+        let trimmed_env = from_env.trim();
+        if !trimmed_env.is_empty() {
+            return trimmed_env.to_string();
+        }
+        let trimmed_yaml = yaml_val.trim();
+        if !trimmed_yaml.is_empty() {
+            return trimmed_yaml.to_string();
+        }
+        String::new()
     };
 
     let provider = resolve("LLM_PROVIDER", &cfg.llm.provider)

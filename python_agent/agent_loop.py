@@ -84,7 +84,8 @@ def _load_config() -> None:
     llm = cfg.get("llm") or {}
 
     def _set_default(env_var: str, value: Any) -> None:
-        """Set env_var only when it is not already present in the environment."""
+        """Set env_var only when it is not already present in the environment
+        and value is non-empty/non-None."""
         if value and not os.environ.get(env_var):
             os.environ[env_var] = str(value)
 

@@ -60,7 +60,7 @@ if ! command -v node &>/dev/null; then
   die "Node.js not found.  Install it from https://nodejs.org/ (version ≥ 18)"
 fi
 NODE_VER=$(node --version)
-NODE_MAJOR=$(echo "$NODE_VER" | sed 's/v\([0-9]*\).*/\1/')
+NODE_MAJOR=$(echo "$NODE_VER" | sed 's/[^0-9]*\([0-9]*\).*/\1/')
 if [ "$NODE_MAJOR" -lt 18 ]; then
   die "Node.js $NODE_VER is too old.  Version ≥ 18 is required."
 fi
