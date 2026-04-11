@@ -156,11 +156,15 @@ async function loadReport() {
   }
 }
 
+const MAX_TITLE_LENGTH = 28
+
 function applySelectedStrategy(strat) {
   if (!strat) return
   metrics.value = strat.metrics ?? null
   const idea = strat.idea ?? ''
-  chartTitle.value = idea.length > 28 ? idea.slice(0, 28) + '…' : idea || '回测结果'
+  chartTitle.value = idea.length > MAX_TITLE_LENGTH
+    ? idea.slice(0, MAX_TITLE_LENGTH) + '…'
+    : idea || '回测结果'
   if (strat.metrics?.equity_curve?.length) {
     equityCurve.value = strat.metrics.equity_curve
     chart?.setOption(buildOption(equityCurve.value))

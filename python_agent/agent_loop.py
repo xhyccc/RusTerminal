@@ -104,8 +104,12 @@ def _load_config() -> None:
     if "max_retries" in agent_cfg:
         try:
             MAX_RETRIES = int(agent_cfg["max_retries"])
-        except (TypeError, ValueError):
-            pass
+        except (TypeError, ValueError) as exc:
+            print(
+                f"[AGENT_THINKING] config.yaml: invalid agent.max_retries value "
+                f"({agent_cfg['max_retries']!r}) — using default {MAX_RETRIES}. Error: {exc}",
+                flush=True,
+            )
 
     backtest = agent_cfg.get("backtest") or {}
     _set_default("BACKTEST_START_DATE",  backtest.get("start_date"))
@@ -176,7 +180,8 @@ You are an expert quantitative analyst who writes Backtrader strategies for Chin
 
 Rules:
 1. Fetch market data using the shared cache module (already in the same directory):
-       import sys, os
+       import sys
+       import os
        sys.path.insert(0, os.path.dirname(__file__))
        from data_cache import fetch_stock_data
        df = fetch_stock_data(symbol, start_date_yyyymmdd, end_date_yyyymmdd)

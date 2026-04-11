@@ -86,7 +86,12 @@ def _fetch_akshare(symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
 
 
 def _yf_ticker(symbol: str) -> str:
-    """Map a bare A-share code to its Yahoo Finance ticker."""
+    """Map a bare A-share code to its Yahoo Finance ticker.
+
+    Shanghai Stock Exchange codes all start with 6 (main board 6xxxxx,
+    STAR Market 688xxx).  All other numeric codes belong to Shenzhen
+    (main board 0xxxxx, Growth Enterprise 3xxxxx, B-shares 2xxxxx).
+    """
     return symbol + (".SS" if symbol.startswith("6") else ".SZ")
 
 

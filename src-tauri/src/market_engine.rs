@@ -98,8 +98,8 @@ fn write_strategies(strategies: &[Strategy]) -> Result<(), String> {
 /// fires notifications for enabled strategies.
 async fn market_loop(app_handle: AppHandle, running: Arc<AtomicBool>) {
     // Tick granularity: check every 5 seconds whether the full interval has
-    // elapsed or the loop has been stopped.  This lets the user change the
-    // poll interval without waiting for the old sleep to finish.
+    // elapsed or the loop has been stopped.  5 s balances responsiveness (interval
+    // changes take effect quickly) against needless CPU wakeups.
     const TICK_SECS: u64 = 5;
     let mut elapsed: u64 = 0;
 
