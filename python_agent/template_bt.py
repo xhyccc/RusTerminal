@@ -4,9 +4,14 @@ This file is used as a template by agent_loop.py and may be overwritten by the L
 """
 
 import sys
+import os
 import json
 import math
-import akshare as ak
+
+# Allow importing from the python_agent package directory.
+sys.path.insert(0, os.path.dirname(__file__))
+
+from data_cache import fetch_stock_data  # shared cache: akshare → yfinance → Sina
 import pandas as pd
 import backtrader as bt
 
@@ -28,24 +33,8 @@ class AkshareData(bt.feeds.PandasData):
 
 
 def fetch_data(symbol: str = "000001", start_date: str = "20220101", end_date: str = "20231231"):
-    df = ak.stock_zh_a_hist(
-        symbol=symbol,
-        period="daily",
-        start_date=start_date,
-        end_date=end_date,
-        adjust="qfq",
-    )
-    df = df.rename(
-        columns={
-            "日期": "date",
-            "开盘": "open",
-            "最高": "high",
-            "最低": "low",
-            "收盘": "close",
-            "成交量": "volume",
-        }
-    )
-    df["date"] = pd.to_datetime(df["date"])
+    """Fetch OHLCV data via the shared cache (local CSV → akshare → yfinance → Sina)."""
+    df = fetch_stock_data(symbol, start_date, end_date)
     df = df.set_index("date").sort_index()
     return df[["open", "high", "low", "close", "volume"]]
 

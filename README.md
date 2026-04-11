@@ -26,6 +26,10 @@
    - [Data Flow](#data-flow)
 10. [Configuration](#configuration)
 11. [Environment Variables](#environment-variables)
+    - [Shared config](#shared-config)
+    - [Provider-specific API key variables](#provider-specific-api-key-variables)
+    - [Azure OpenAI](#azure-openai)
+    - [Provider defaults](#provider-defaults)
 
 ---
 
@@ -45,7 +49,8 @@ Everything runs locally — no cloud service required. The AI agent uses [goose]
 
 | Feature | Description |
 |---|---|
-| 🤖 **Dual AI engines** | Goose recipe (primary) or LangChain/OpenAI GPT-4o-mini (fallback) |
+| 🤖 **Dual AI engines** | Goose recipe (primary) or LangChain fallback; both share the same LLM config |
+| 🔌 **Multi-provider LLM** | OpenAI, Kimi, GLM, SiliconFlow, Azure OpenAI — switch with one env var |
 | 🔁 **Self-healing agent** | Up to 5 automatic retry-and-fix cycles on script errors |
 | 📈 **Live equity chart** | ECharts area chart updated immediately after each successful backtest |
 | 📊 **Performance metrics** | Sharpe ratio, max drawdown %, total return %, number of trades |
@@ -99,6 +104,7 @@ Everything runs locally — no cloud service required. The AI agent uses [goose]
 │  │                  Python Agent Layer                           │   │
 │  │                                                               │   │
 │  │  agent_loop.py ──► goose run --recipe quant_strategy.yaml    │   │
+  │                    (env vars: LLM_PROVIDER, LLM_API_KEY …)   │   │
 │  │                         │                                     │   │
 │  │                    ┌────▼────────────────────────────┐        │   │
 │  │                    │  goose (Rust AI agent)           │        │   │
@@ -112,7 +118,7 @@ Everything runs locally — no cloud service required. The AI agent uses [goose]
 │  │                    │  └─────────────────────────────┘│        │   │
 │  │                    └─────────────────────────────────┘        │   │
 │  │                                                               │   │
-│  │  Python fallback ──► LangChain + GPT-4o-mini + backtrader     │   │
+│  │  Python fallback ──► LangChain + configurable LLM + backtrader     │   │
 │  │                                                               │   │
 │  │  Workspace files:                                             │   │
 │  │    python_agent/workspace/temp_strategy.py  (generated code)  │   │
@@ -159,7 +165,7 @@ StrategyInput.vue  ──invoke("run_agent", {idea})──►  agent_runner.rs
 | Charts | [ECharts 5](https://echarts.apache.org) | Equity-curve area chart |
 | Build tool | [Vite 5](https://vitejs.dev) | Fast HMR dev server + bundler |
 | Primary AI agent | [goose](https://block.github.io/goose/) | YAML-recipe AI agent (Rust) |
-| Fallback AI | LangChain + OpenAI GPT-4o-mini | Python-based strategy generation |
+| Fallback AI | LangChain + configurable LLM (OpenAI / Kimi / GLM / SiliconFlow / Azure) | Python-based strategy generation |
 | Backtesting | [backtrader](https://www.backtrader.com/) | Python strategy execution engine |
 | Market data | [akshare](https://akshare.akfamily.xyz/) | Chinese A-share data (free) |
 
@@ -204,12 +210,43 @@ RusTerminal/
 ├── index.html                    # Vite HTML shell
 ├── vite.config.js                # Vite + Vue plugin config
 ├── tailwind.config.js            # Custom colour palette
-└── package.json                  # npm dependencies
+├── package.json                  # npm dependencies
+├── build.sh                      # One-command from-scratch build script
+├── config.example.yaml           # Template LLM + agent config (safe to commit)
+└── config.yaml                   # Your local config with API keys (gitignored)
 ```
 
 ---
 
 ## Getting Started
+
+### Option A — One-command build (recommended)
+
+```bash
+git clone https://github.com/xhyccc/RusTerminal.git
+cd RusTerminal
+bash build.sh --deps-only    # install all deps + create config.yaml from the template
+```
+
+Then edit `config.yaml` to fill in your LLM provider and API key, and run:
+
+```bash
+bash build.sh --dev     # launch dev server with hot-reload
+# or
+bash build.sh           # build production installer
+```
+
+`build.sh` flags:
+
+| Flag | Effect |
+|---|---|
+| *(none)* | Install deps + build production Tauri app |
+| `--dev` | Install deps + launch dev server (hot-reload) |
+| `--deps-only` | Install deps only, print next-steps |
+
+---
+
+### Option B — Manual steps
 
 ### Prerequisites
 
@@ -223,7 +260,7 @@ RusTerminal/
 **Install Python dependencies:**
 
 ```bash
-pip install backtrader akshare langchain langchain-openai
+pip install backtrader akshare "langchain>=0.2" "langchain-openai>=0.1" pyyaml
 ```
 
 **Install goose (optional but recommended):**
@@ -246,6 +283,10 @@ npm install
 
 # Install Tauri CLI (first time only)
 cargo install tauri-cli --version "^2"
+
+# Create your local config file
+cp config.example.yaml config.yaml
+# → Edit config.yaml to set your LLM provider and API key
 ```
 
 ### Running in Development
@@ -275,15 +316,45 @@ Produces a native installer in `src-tauri/target/release/bundle/`.
 
 ## Tutorial: Generate Your First Strategy
 
-### Step 1 — Set your OpenAI key (Python fallback only)
+### Step 1 — Configure your LLM provider
 
-If goose is **not** installed, the app uses the Python agent which calls GPT-4o-mini:
+The easiest way is to edit `config.yaml` (created automatically by `build.sh`,
+or copy it manually with `cp config.example.yaml config.yaml`):
 
-```bash
-export OPENAI_API_KEY="sk-..."
+```yaml
+# config.yaml
+llm:
+  provider: openai          # openai | kimi | glm | siliconflow | azure
+  api_key:  "sk-..."        # your API key
+
+  # Optional — override when needed:
+  # model:    "gpt-4o-mini"
+  # base_url: "https://api.openai.com/v1"
 ```
 
-Skip this step if goose is installed — goose uses its own model configuration.
+**Supported providers at a glance:**
+
+| Provider | `provider` value | Default model |
+|---|---|---|
+| OpenAI | `openai` | `gpt-4o-mini` |
+| Kimi (Moonshot AI) | `kimi` | `moonshot-v1-8k` |
+| GLM (Zhipu AI) | `glm` | `glm-4-flash` |
+| SiliconFlow | `siliconflow` | `Qwen/Qwen2.5-7B-Instruct` |
+| Azure OpenAI | `azure` | see `azure:` block in config |
+
+> **Note — "coding plan" subscriptions:** This app calls the standard Chat
+> Completions endpoint (`/v1/chat/completions`).  If your LLM subscription is
+> a "coding" tier, check that chat completions are included.  If they are,
+> simply set the correct `base_url` and `model` in `config.yaml` and everything
+> will work.  When in doubt, test with:
+> ```bash
+> curl -H "Authorization: Bearer $YOUR_KEY" \
+>      "$YOUR_BASE_URL/chat/completions" \
+>      -d '{"model":"<model>","messages":[{"role":"user","content":"hi"}]}'
+> ```
+
+You can also use environment variables instead of (or in addition to) the YAML
+file — env vars always take precedence over `config.yaml` values.
 
 ### Step 2 — Launch the app
 
@@ -427,10 +498,11 @@ User idea (natural language)
   ┌─────────────────────────────────────────────────────┐
   │  agent_loop.py — Python fallback                     │
   │                                                      │
-  │  • LangChain ChatOpenAI (gpt-4o-mini)                │
+  │  • LangChain with configurable LLM provider          │
+  │    (openai / kimi / glm / siliconflow / azure)       │
   │  • Conversation history for multi-turn self-healing  │
   │  • Same 5-retry loop + identical output format       │
-  │  • Falls back to template_bt.py if no OPENAI_API_KEY │
+  │  • Falls back to template_bt.py if no API key is set │
   └─────────────────────────────────────────────────────┘
 ```
 
@@ -498,31 +570,89 @@ All persistence is plain JSON on disk — no database, no cloud, no telemetry.
 
 ## Configuration
 
+### `config.yaml` (primary — recommended)
+
+Copy `config.example.yaml` → `config.yaml` (done automatically by `build.sh`).
+Edit it to set your LLM provider, key, and agent options.  The file is gitignored.
+
+```yaml
+llm:
+  provider: openai          # openai | kimi | glm | siliconflow | azure
+  api_key:  ""              # your API key (or use env var)
+  model:    ""              # leave blank for provider default
+  base_url: ""              # leave blank for provider default
+  azure:                    # only needed when provider: azure
+    endpoint:    ""
+    deployment:  ""
+    api_version: "2024-02-01"
+
+agent:
+  max_retries: 5            # reduce if your plan has strict rate limits
+  backtest:
+    start_date:   "2022-01-01"
+    end_date:     "2023-12-31"
+    initial_cash: 100000
+```
+
+### Other configurable settings
+
 | File | Key setting | Default |
 |---|---|---|
+| `config.yaml` | LLM provider, model, key, backtest dates | see above |
 | `src-tauri/tauri.conf.json` | Window size | 1400 × 900 px |
 | `src-tauri/tauri.conf.json` | Min window size | 1024 × 600 px |
 | `python_agent/quant_strategy.yaml` | `max_retries` | 5 |
 | `python_agent/quant_strategy.yaml` | `workspace_dir` | `python_agent/workspace` |
-| `python_agent/agent_loop.py` | `MAX_RETRIES` | 5 |
 | `market_engine.rs` | Heartbeat interval | 60 s |
 | `MonitorPanel.vue` | Poll interval | 30 s |
 | `AgentTerminal.vue` | Terminal scrollback | 5 000 lines |
-
-Backtest defaults (set inside generated strategy scripts):
-
-| Parameter | Default |
-|---|---|
-| Start date | 2022-01-01 |
-| End date | 2023-12-31 |
-| Initial cash | ¥100,000 CNY |
 
 ---
 
 ## Environment Variables
 
+Both the **goose** engine and the **Python fallback** read the same set of
+variables.  `agent_runner.rs` automatically translates them to goose's native
+variables (`GOOSE_PROVIDER`, `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `GOOSE_MODEL`)
+when spawning the goose subprocess.
+
+### Shared config
+
 | Variable | Required | Description |
 |---|---|---|
-| `OPENAI_API_KEY` | Only for Python fallback | GPT-4o-mini API key. Not needed when goose is installed. |
+| `LLM_PROVIDER` | No (default: `openai`) | Provider: `openai`, `kimi`, `glm`, `siliconflow`, or `azure` |
+| `LLM_API_KEY` | Yes* | API key for the chosen provider. Also accepted as a fallback when the provider-specific var is absent. |
+| `LLM_MODEL` | No | Override the default model for the chosen provider |
+| `LLM_BASE_URL` | No | Override the API base URL (useful for any OpenAI-compatible endpoint) |
 
-goose reads its own model configuration (set via `goose configure` or `~/.config/goose/`).
+*Not required when using the built-in template fallback or when the provider-specific key variable is set.
+
+### Provider-specific API key variables
+
+These are checked **before** `LLM_API_KEY` for their respective providers:
+
+| Variable | Provider |
+|---|---|
+| `OPENAI_API_KEY` | `openai` |
+| `KIMI_API_KEY` | `kimi` |
+| `GLM_API_KEY` | `glm` |
+| `SILICONFLOW_API_KEY` | `siliconflow` |
+
+### Azure OpenAI
+
+| Variable | Required | Description |
+|---|---|---|
+| `AZURE_OPENAI_API_KEY` | Yes | Azure OpenAI API key |
+| `AZURE_OPENAI_ENDPOINT` | Yes | Endpoint URL, e.g. `https://<resource>.openai.azure.com/` |
+| `AZURE_OPENAI_DEPLOYMENT` | Yes | Deployment / model name |
+| `AZURE_OPENAI_API_VERSION` | No (default: `2024-02-01`) | Azure API version |
+
+### Provider defaults
+
+| Provider | Default model | API base URL |
+|---|---|---|
+| `openai` | `gpt-4o-mini` | OpenAI SDK default (`https://api.openai.com/v1`) |
+| `kimi` | `moonshot-v1-8k` | `https://api.moonshot.cn/v1` |
+| `glm` | `glm-4-flash` | `https://open.bigmodel.cn/api/paas/v4` |
+| `siliconflow` | `Qwen/Qwen2.5-7B-Instruct` | `https://api.siliconflow.cn/v1` |
+| `azure` | from `AZURE_OPENAI_DEPLOYMENT` | from `AZURE_OPENAI_ENDPOINT` |

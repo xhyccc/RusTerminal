@@ -23,6 +23,8 @@ pub fn run() {
             market_engine::start_market_engine,
             market_engine::get_strategies,
             market_engine::toggle_strategy,
+            market_engine::get_poll_interval,
+            market_engine::set_poll_interval,
             notifier::send_notification,
         ])
         .run(tauri::generate_context!())

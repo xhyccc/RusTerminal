@@ -2,6 +2,55 @@ use tauri::{AppHandle, Emitter};
 use std::process::{Command, Stdio};
 use std::io::{BufRead, BufReader};
 
+// ---------------------------------------------------------------------------
+// YAML config
+// ---------------------------------------------------------------------------
+
+/// Minimal mirror of config.yaml — only the fields that agent_runner needs.
+#[derive(Debug, Default, serde::Deserialize)]
+struct AppConfig {
+    #[serde(default)]
+    llm: LlmConfig,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct LlmConfig {
+    #[serde(default)]
+    provider: String,
+    #[serde(default)]
+    api_key: String,
+    #[serde(default)]
+    model: String,
+    #[serde(default)]
+    base_url: String,
+    #[serde(default)]
+    azure: AzureConfig,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct AzureConfig {
+    #[serde(default)]
+    endpoint: String,
+    #[serde(default)]
+    deployment: String,
+    #[serde(default)]
+    api_version: String,
+}
+
+/// Try to load `config.yaml` from the current working directory (project root).
+/// Returns a default (all-empty) config on any error so the rest of the code
+/// can always use env vars as the authoritative source.
+fn load_app_config() -> AppConfig {
+    let path = std::path::Path::new("config.yaml");
+    if !path.exists() {
+        return AppConfig::default();
+    }
+    match std::fs::read_to_string(path) {
+        Ok(text) => serde_yaml::from_str(&text).unwrap_or_default(),
+        Err(_) => AppConfig::default(),
+    }
+}
+
 /// Locate the goose binary.  Checks common installation paths in addition to
 /// whatever is on PATH so that a freshly-installed goose is found even when
 /// the shell profile has not been re-sourced.
@@ -31,6 +80,139 @@ fn find_goose() -> Option<String> {
     None
 }
 
+/// Return the first non-empty value found among the given environment variable names.
+fn first_env(vars: &[&str]) -> Option<String> {
+    vars.iter()
+        .find_map(|v| std::env::var(v).ok().filter(|s| !s.is_empty()))
+}
+
+/// Build the list of extra environment variables to inject into the goose process
+/// so that it uses the same LLM provider / key / model as the Python fallback.
+///
+/// Priority (highest first):
+///   1. Shell environment variables (already present in `std::env`)
+///   2. config.yaml values
+///
+/// Reads `LLM_PROVIDER` (default `openai`) and maps to goose's own variables:
+///   - `GOOSE_PROVIDER`   — which provider plugin goose should use
+///   - `OPENAI_API_KEY`   — API key forwarded for OpenAI-compatible providers
+///   - `OPENAI_BASE_URL`  — custom endpoint for kimi / glm / siliconflow
+///   - `GOOSE_MODEL`      — model override (from `LLM_MODEL` or provider default)
+///
+/// Azure: goose receives `GOOSE_PROVIDER=azure`; the `AZURE_OPENAI_*` variables
+/// are already in the environment and are inherited automatically.
+fn llm_env_for_goose() -> Vec<(String, String)> {
+    let cfg = load_app_config();
+
+    // Helper: env var → config.yaml fallback → empty string.
+    // Avoids unnecessary allocations: only trims/clones when a non-empty value exists.
+    let resolve = |env_var: &str, yaml_val: &str| -> String {
+        let from_env = std::env::var(env_var).unwrap_or_default();
+        let trimmed_env = from_env.trim();
+        if !trimmed_env.is_empty() {
+            return trimmed_env.to_string();
+        }
+        let trimmed_yaml = yaml_val.trim();
+        if !trimmed_yaml.is_empty() {
+            return trimmed_yaml.to_string();
+        }
+        String::new()
+    };
+
+    let provider = resolve("LLM_PROVIDER", &cfg.llm.provider)
+        .to_lowercase()
+        .or_if_empty("openai".to_string());
+
+    let mut env: Vec<(String, String)> = Vec::new();
+
+    if provider == "azure" {
+        env.push(("GOOSE_PROVIDER".to_string(), "azure".to_string()));
+        // Inject Azure vars from config if not already in the environment.
+        for (var, yaml) in [
+            ("AZURE_OPENAI_API_KEY",    cfg.llm.api_key.as_str()),
+            ("AZURE_OPENAI_ENDPOINT",   cfg.llm.azure.endpoint.as_str()),
+            ("AZURE_OPENAI_DEPLOYMENT", cfg.llm.azure.deployment.as_str()),
+            ("AZURE_OPENAI_API_VERSION",cfg.llm.azure.api_version.as_str()),
+        ] {
+            let val = resolve(var, yaml);
+            if !val.is_empty() {
+                env.push((var.to_string(), val));
+            }
+        }
+        return env;
+    }
+
+    // Map provider → (goose_provider, default_base_url, api_key_vars, default_model)
+    let (goose_provider, default_base, key_vars, default_model): (
+        &str,
+        Option<&str>,
+        &[&str],
+        &str,
+    ) = match provider.as_str() {
+        "kimi" => (
+            "openai",
+            Some("https://api.moonshot.cn/v1"),
+            &["KIMI_API_KEY", "LLM_API_KEY", "OPENAI_API_KEY"],
+            "moonshot-v1-8k",
+        ),
+        "glm" => (
+            "openai",
+            Some("https://open.bigmodel.cn/api/paas/v4"),
+            &["GLM_API_KEY", "LLM_API_KEY", "OPENAI_API_KEY"],
+            "glm-4-flash",
+        ),
+        "siliconflow" => (
+            "openai",
+            Some("https://api.siliconflow.cn/v1"),
+            &["SILICONFLOW_API_KEY", "LLM_API_KEY", "OPENAI_API_KEY"],
+            "Qwen/Qwen2.5-7B-Instruct",
+        ),
+        _ => (
+            "openai",
+            None,
+            &["OPENAI_API_KEY", "LLM_API_KEY"],
+            "gpt-4o-mini",
+        ),
+    };
+
+    env.push(("GOOSE_PROVIDER".to_string(), goose_provider.to_string()));
+
+    // Base URL: env var > config.yaml > provider default
+    let base_url = resolve("LLM_BASE_URL", &cfg.llm.base_url)
+        .or_if_empty(default_base.unwrap_or("").to_string());
+    if !base_url.is_empty() {
+        env.push(("OPENAI_BASE_URL".to_string(), base_url));
+    }
+
+    // API key: env var chain > config.yaml api_key
+    let api_key = first_env(key_vars)
+        .unwrap_or_default()
+        .or_if_empty(cfg.llm.api_key.clone());
+    if !api_key.is_empty() {
+        env.push(("OPENAI_API_KEY".to_string(), api_key));
+    }
+
+    // Model: env var > config.yaml > provider default
+    let model = resolve("LLM_MODEL", &cfg.llm.model)
+        .or_if_empty(default_model.to_string());
+    env.push(("GOOSE_MODEL".to_string(), model));
+
+    env
+}
+
+// ---------------------------------------------------------------------------
+// String helper — not in std
+// ---------------------------------------------------------------------------
+
+trait OrIfEmpty {
+    fn or_if_empty(self, fallback: String) -> String;
+}
+impl OrIfEmpty for String {
+    fn or_if_empty(self, fallback: String) -> String {
+        if self.is_empty() { fallback } else { self }
+    }
+}
+
 /// Stream every line from a spawned process to the frontend as an `agent-log` event.
 fn stream_to_frontend(app_handle: &AppHandle, child: &mut std::process::Child) {
     if let Some(stdout) = child.stdout.take() {
@@ -57,6 +239,7 @@ async fn run_with_goose(
 
     let mut child = Command::new(&goose_bin)
         .args(["run", "--recipe", recipe, "--params", &params, "--no-session"])
+        .envs(llm_env_for_goose())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
