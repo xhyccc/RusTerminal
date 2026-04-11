@@ -1,7 +1,18 @@
 <template>
   <div class="flex flex-col h-full bg-terminal-panel p-4 overflow-hidden">
-    <div class="mb-2 text-xs text-terminal-dimgreen opacity-70 tracking-wider uppercase shrink-0">
-      📈 回测结果
+    <!-- Header: title + back button when a specific strategy is pinned -->
+    <div class="mb-2 shrink-0 flex items-center justify-between gap-2">
+      <div class="text-xs text-terminal-dimgreen opacity-70 tracking-wider uppercase truncate">
+        📈 {{ chartTitle }}
+      </div>
+      <button
+        v-if="props.selectedStrategy"
+        @click="$emit('clear-selection')"
+        class="text-xs px-2 py-0.5 border border-terminal-border text-terminal-dimgreen rounded
+               hover:border-terminal-green hover:text-terminal-green transition-colors shrink-0"
+      >
+        ✕ 最新结果
+      </button>
     </div>
 
     <!-- Metrics table -->
@@ -47,6 +58,8 @@ const props = defineProps({
   /** When set, display this strategy instead of the latest report.json. */
   selectedStrategy: { type: Object, default: null },
 })
+
+defineEmits(['clear-selection'])
 
 const chartEl = ref(null)
 const metrics = ref(null)
@@ -123,11 +136,11 @@ function buildOption(curve) {
 
 async function loadReport() {
   try {
-    // Try to read via Tauri fs
     const { readTextFile } = await import('@tauri-apps/plugin-fs')
     const raw = await readTextFile('python_agent/workspace/report.json')
     const report = JSON.parse(raw)
     metrics.value = report.metrics
+    chartTitle.value = '回测结果'
     if (report.metrics?.equity_curve) {
       equityCurve.value = report.metrics.equity_curve
       chart?.setOption(buildOption(equityCurve.value))
@@ -143,6 +156,26 @@ async function loadReport() {
   }
 }
 
+function applySelectedStrategy(strat) {
+  if (!strat) return
+  metrics.value = strat.metrics ?? null
+  const idea = strat.idea ?? ''
+  chartTitle.value = idea.length > 28 ? idea.slice(0, 28) + '…' : idea || '回测结果'
+  if (strat.metrics?.equity_curve?.length) {
+    equityCurve.value = strat.metrics.equity_curve
+    chart?.setOption(buildOption(equityCurve.value))
+  }
+}
+
+// Switch display whenever a strategy is selected from MonitorPanel.
+watch(() => props.selectedStrategy, (strat) => {
+  if (strat) {
+    applySelectedStrategy(strat)
+  } else {
+    loadReport()
+  }
+})
+
 onMounted(async () => {
   chart = echarts.init(chartEl.value, null, { renderer: 'canvas' })
   chart.setOption(buildOption([]))
@@ -150,11 +183,21 @@ onMounted(async () => {
   resizeObserver = new ResizeObserver(() => chart?.resize())
   resizeObserver.observe(chartEl.value)
 
-  await loadReport()
+  if (props.selectedStrategy) {
+    applySelectedStrategy(props.selectedStrategy)
+  } else {
+    await loadReport()
+  }
 
   try {
     unlisten = await listen('agent-log', async (event) => {
-      if (typeof event.payload === 'string' && event.payload.includes('[AGENT_SUCCESS]')) {
+      // Auto-refresh the latest report when a new agent run succeeds,
+      // but only if we are not pinned to a specific strategy.
+      if (
+        !props.selectedStrategy &&
+        typeof event.payload === 'string' &&
+        event.payload.includes('[AGENT_SUCCESS]')
+      ) {
         await loadReport()
       }
     })

@@ -175,7 +175,13 @@ SYSTEM_PROMPT = """\
 You are an expert quantitative analyst who writes Backtrader strategies for Chinese A-share markets.
 
 Rules:
-1. Use akshare (`ak.stock_zh_a_hist`) to fetch data.
+1. Fetch market data using the shared cache module (already in the same directory):
+       import sys, os
+       sys.path.insert(0, os.path.dirname(__file__))
+       from data_cache import fetch_stock_data
+       df = fetch_stock_data(symbol, start_date_yyyymmdd, end_date_yyyymmdd)
+   This tries local CSV cache first, then falls back to akshare, yfinance, and Sina Finance.
+   Do NOT call akshare, yfinance, or pandas_datareader directly.
 2. The script must be fully self-contained and runnable with `python3 <file>`.
 3. At the end of the script, print ONE JSON object to stdout with these keys:
    - sharpe_ratio   (float or null)

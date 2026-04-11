@@ -54,14 +54,17 @@
             </div>
             <!-- Right: backtest chart -->
             <div class="w-full lg:w-96 xl:w-[480px] shrink-0 flex flex-col overflow-hidden">
-              <BacktestChart />
+              <BacktestChart
+                :selectedStrategy="selectedStrategy"
+                @clear-selection="selectedStrategy = null"
+              />
             </div>
           </div>
         </div>
 
         <!-- Dashboard -->
         <div v-if="activeTab === 'dashboard'" class="flex-1 overflow-auto p-4">
-          <MonitorPanel />
+          <MonitorPanel @strategy-selected="onStrategySelected" />
         </div>
       </main>
     </div>
@@ -94,13 +97,20 @@ const engineRunning = ref(false)
 const heartbeatTime = ref('--:--:--')
 const statusMessage = ref('就绪 | 等待指令…')
 const activeStrategyCount = ref(0)
+const selectedStrategy = ref(null)
 
 function onAgentStarted() {
   statusMessage.value = '⏳ Agent 正在运行…'
+  selectedStrategy.value = null   // reset to show the incoming run's result
 }
 
 function onAgentDone(success) {
   statusMessage.value = success ? '✅ Agent 执行完成' : '❌ Agent 执行失败'
+}
+
+function onStrategySelected(strat) {
+  selectedStrategy.value = strat
+  activeTab.value = 'lab'
 }
 
 onMounted(async () => {

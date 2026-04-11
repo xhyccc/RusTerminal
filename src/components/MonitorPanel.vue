@@ -1,12 +1,26 @@
 <template>
   <div class="p-4">
-    <div class="mb-4 flex items-center justify-between">
-      <h2 class="text-sm font-bold tracking-widest text-terminal-green uppercase">
+    <div class="mb-4 flex items-center justify-between gap-4">
+      <h2 class="text-sm font-bold tracking-widest text-terminal-green uppercase shrink-0">
         📡 策略监控面板
       </h2>
+      <!-- Poll interval control -->
+      <div class="flex items-center gap-2 text-xs">
+        <span class="text-terminal-dimgreen opacity-60 shrink-0">轮询间隔</span>
+        <input
+          v-model.number="pollIntervalMin"
+          type="number"
+          min="1"
+          max="1440"
+          class="w-16 bg-black border border-terminal-border text-terminal-green text-center
+                 px-1 py-0.5 rounded outline-none focus:border-terminal-green transition-colors"
+          @change="updatePollInterval"
+        />
+        <span class="text-terminal-dimgreen opacity-60 shrink-0">分钟</span>
+      </div>
       <button
         @click="refresh"
-        class="text-xs px-3 py-1 border border-terminal-border text-terminal-dimgreen
+        class="text-xs px-3 py-1 border border-terminal-border text-terminal-dimgreen shrink-0
                hover:text-terminal-green hover:border-terminal-green rounded transition-colors"
       >
         ⟳ 刷新
@@ -118,6 +132,7 @@ import { listen } from '@tauri-apps/api/event'
 defineEmits(['strategy-selected'])
 
 const strategies = ref([])
+const pollIntervalMin = ref(60)   // mirrors POLL_INTERVAL_SECS / 60
 let unlisten = null
 let refreshTimer = null
 
@@ -208,6 +223,16 @@ function formatDate(iso) {
   }
 }
 
+async function updatePollInterval() {
+  const secs = Math.max(60, Math.round(pollIntervalMin.value) * 60)
+  pollIntervalMin.value = secs / 60
+  try {
+    await invoke('set_poll_interval', { secs })
+  } catch (e) {
+    console.warn('set_poll_interval not available in browser mode:', e)
+  }
+}
+
 async function refresh() {
   try {
     strategies.value = await invoke('get_strategies')
@@ -233,6 +258,12 @@ async function toggleStrategy(strat) {
 }
 
 onMounted(async () => {
+  // Load current poll interval from backend.
+  try {
+    const secs = await invoke('get_poll_interval')
+    pollIntervalMin.value = Math.round(secs / 60)
+  } catch { /* browser mode */ }
+
   await refresh()
 
   // Refresh when agent completes

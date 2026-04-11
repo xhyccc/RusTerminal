@@ -70,7 +70,13 @@ llm:
     api_version: "2024-02-01"
 
 
-# ── Agent behaviour ───────────────────────────────────────────────────────────
+# ── Market engine ─────────────────────────────────────────────────────────────
+market:
+  # How often (seconds) the market engine polls strategies and emits heartbeats.
+  # 3600 = once per hour — suitable for daily/swing trading (non-HFT).
+  # Minimum accepted value: 60.  Changes made in the UI take effect immediately;
+  # this setting is only used as the startup default.
+  poll_interval_secs: 3600
 agent:
   # Maximum number of automatic self-healing retries when the generated
   # Backtrader script fails.  Reduce this if your plan has tight rate limits.
