@@ -33,6 +33,7 @@ from typing import Any
 # ---------------------------------------------------------------------------
 
 AGENT_DIR = Path(__file__).parent
+PROJECT_ROOT = AGENT_DIR.parent          # repo root — where config.yaml lives
 RECIPE_FILE = AGENT_DIR / "quant_strategy.yaml"
 WORKSPACE = AGENT_DIR / "workspace"
 WORKSPACE.mkdir(exist_ok=True)
@@ -40,7 +41,79 @@ TEMP_STRATEGY = WORKSPACE / "temp_strategy.py"
 REPORT_FILE = WORKSPACE / "report.json"
 STRATEGIES_FILE = WORKSPACE / "strategies.json"
 
-MAX_RETRIES = 5
+MAX_RETRIES = 5  # may be overridden by _load_config()
+
+# ---------------------------------------------------------------------------
+# YAML configuration loader
+# ---------------------------------------------------------------------------
+# config.yaml lives at the project root.  Values in that file serve as
+# defaults; environment variables always take precedence.
+
+
+def _load_config() -> None:
+    """
+    Load config.yaml from the project root and apply its values as env-var
+    defaults.  Environment variables already set in the shell are never
+    overwritten.  This function also updates the module-level MAX_RETRIES
+    constant when agent.max_retries is present in the config.
+    """
+    global MAX_RETRIES
+
+    config_path = PROJECT_ROOT / "config.yaml"
+    if not config_path.exists():
+        return  # config.yaml is optional
+
+    try:
+        import yaml  # PyYAML — installed by build.sh
+    except ImportError:
+        print(
+            "[AGENT_THINKING] pyyaml not installed — skipping config.yaml. "
+            "Run: pip install pyyaml",
+            flush=True,
+        )
+        return
+
+    try:
+        with config_path.open() as fh:
+            cfg: dict = yaml.safe_load(fh) or {}
+    except Exception as exc:
+        print(f"[AGENT_THINKING] Could not parse config.yaml: {exc}", flush=True)
+        return
+
+    # ── LLM section ──────────────────────────────────────────────────────────
+    llm = cfg.get("llm") or {}
+
+    def _set_default(env_var: str, value: Any) -> None:
+        """Set env_var only when it is not already present in the environment."""
+        if value and not os.environ.get(env_var):
+            os.environ[env_var] = str(value)
+
+    _set_default("LLM_PROVIDER", llm.get("provider"))
+    _set_default("LLM_API_KEY",  llm.get("api_key"))
+    _set_default("LLM_MODEL",    llm.get("model"))
+    _set_default("LLM_BASE_URL", llm.get("base_url"))
+
+    azure = llm.get("azure") or {}
+    _set_default("AZURE_OPENAI_ENDPOINT",    azure.get("endpoint"))
+    _set_default("AZURE_OPENAI_DEPLOYMENT",  azure.get("deployment"))
+    _set_default("AZURE_OPENAI_API_VERSION", azure.get("api_version"))
+
+    # ── Agent section ─────────────────────────────────────────────────────────
+    agent_cfg = cfg.get("agent") or {}
+    if "max_retries" in agent_cfg:
+        try:
+            MAX_RETRIES = int(agent_cfg["max_retries"])
+        except (TypeError, ValueError):
+            pass
+
+    backtest = agent_cfg.get("backtest") or {}
+    _set_default("BACKTEST_START_DATE",  backtest.get("start_date"))
+    _set_default("BACKTEST_END_DATE",    backtest.get("end_date"))
+    _set_default("BACKTEST_INITIAL_CASH", backtest.get("initial_cash"))
+
+
+# Load the config at import time so all subsequent code sees the defaults.
+_load_config()
 
 # ---------------------------------------------------------------------------
 # Goose engine

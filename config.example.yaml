@@ -1,0 +1,84 @@
+# AI Quant Terminal — configuration file
+#
+# QUICK START
+# -----------
+# 1. Copy this file:      cp config.example.yaml config.yaml
+# 2. Fill in your API key under llm.api_key (or the provider-specific field).
+# 3. Run the app:         npm run tauri dev
+#
+# config.yaml is listed in .gitignore — your real credentials will NOT be committed.
+# Environment variables always override values in this file.
+# ──────────────────────────────────────────────────────────────────────────────
+
+# ── LLM provider ──────────────────────────────────────────────────────────────
+llm:
+  # Which LLM provider to use.
+  # Supported values: openai | kimi | glm | siliconflow | azure
+  #
+  # NOTE for "coding plan" subscriptions
+  # ─────────────────────────────────────
+  # Many providers offer a cheaper "coding" tier alongside a full "chat" tier.
+  # This app calls the standard Chat Completions endpoint (/v1/chat/completions)
+  # so it works on *any* plan that includes chat completions access — not just
+  # dedicated "chat" plans.
+  #
+  # If your provider's coding plan exposes an OpenAI-compatible endpoint you can
+  # set  provider: openai  (or the matching provider name) and override base_url
+  # below.  As a rule of thumb: if you can run  `curl <base_url>/chat/completions`
+  # with your key and get a response, it will work here.
+  provider: openai
+
+  # API key for the chosen provider.
+  # You may leave this blank and use a provider-specific environment variable
+  # instead (checked before this value):
+  #   openai      → OPENAI_API_KEY
+  #   kimi        → KIMI_API_KEY
+  #   glm         → GLM_API_KEY
+  #   siliconflow → SILICONFLOW_API_KEY
+  #   azure       → AZURE_OPENAI_API_KEY
+  # The generic LLM_API_KEY env var is tried last for all providers.
+  api_key: ""
+
+  # Model override — leave blank to use the provider default:
+  #   openai:       gpt-4o-mini
+  #   kimi:         moonshot-v1-8k
+  #   glm:          glm-4-flash
+  #   siliconflow:  Qwen/Qwen2.5-7B-Instruct
+  #
+  # If your coding-plan subscription only unlocks certain model names, set the
+  # exact model name here (e.g. "gpt-4.1-mini" or "deepseek-coder-v2").
+  model: ""
+
+  # Base URL override — leave blank for the provider's built-in default.
+  # Pre-configured defaults (no need to set for these providers):
+  #   kimi:         https://api.moonshot.cn/v1
+  #   glm:          https://open.bigmodel.cn/api/paas/v4
+  #   siliconflow:  https://api.siliconflow.cn/v1
+  #
+  # Set this when your provider exposes a non-standard endpoint, or when you
+  # use a local OpenAI-compatible proxy (e.g. LM Studio, Ollama OpenAI shim).
+  # Example:  base_url: "http://localhost:11434/v1"
+  base_url: ""
+
+  # ── Azure OpenAI (only used when provider: azure) ────────────────────────
+  azure:
+    # Full endpoint URL, e.g.:  https://<resource>.openai.azure.com/
+    endpoint: ""
+    # The deployment name you created in Azure AI Studio
+    deployment: ""
+    # API version — the value below is a stable general-availability version
+    api_version: "2024-02-01"
+
+
+# ── Agent behaviour ───────────────────────────────────────────────────────────
+agent:
+  # Maximum number of automatic self-healing retries when the generated
+  # Backtrader script fails.  Reduce this if your plan has tight rate limits.
+  max_retries: 5
+
+  # Default backtest window applied to every generated strategy script.
+  backtest:
+    start_date: "2022-01-01"
+    end_date:   "2023-12-31"
+    # Starting cash in CNY (¥)
+    initial_cash: 100000

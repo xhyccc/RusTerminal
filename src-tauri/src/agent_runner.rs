@@ -2,6 +2,55 @@ use tauri::{AppHandle, Emitter};
 use std::process::{Command, Stdio};
 use std::io::{BufRead, BufReader};
 
+// ---------------------------------------------------------------------------
+// YAML config
+// ---------------------------------------------------------------------------
+
+/// Minimal mirror of config.yaml — only the fields that agent_runner needs.
+#[derive(Debug, Default, serde::Deserialize)]
+struct AppConfig {
+    #[serde(default)]
+    llm: LlmConfig,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct LlmConfig {
+    #[serde(default)]
+    provider: String,
+    #[serde(default)]
+    api_key: String,
+    #[serde(default)]
+    model: String,
+    #[serde(default)]
+    base_url: String,
+    #[serde(default)]
+    azure: AzureConfig,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct AzureConfig {
+    #[serde(default)]
+    endpoint: String,
+    #[serde(default)]
+    deployment: String,
+    #[serde(default)]
+    api_version: String,
+}
+
+/// Try to load `config.yaml` from the current working directory (project root).
+/// Returns a default (all-empty) config on any error so the rest of the code
+/// can always use env vars as the authoritative source.
+fn load_app_config() -> AppConfig {
+    let path = std::path::Path::new("config.yaml");
+    if !path.exists() {
+        return AppConfig::default();
+    }
+    match std::fs::read_to_string(path) {
+        Ok(text) => serde_yaml::from_str(&text).unwrap_or_default(),
+        Err(_) => AppConfig::default(),
+    }
+}
+
 /// Locate the goose binary.  Checks common installation paths in addition to
 /// whatever is on PATH so that a freshly-installed goose is found even when
 /// the shell profile has not been re-sourced.
@@ -40,6 +89,10 @@ fn first_env(vars: &[&str]) -> Option<String> {
 /// Build the list of extra environment variables to inject into the goose process
 /// so that it uses the same LLM provider / key / model as the Python fallback.
 ///
+/// Priority (highest first):
+///   1. Shell environment variables (already present in `std::env`)
+///   2. config.yaml values
+///
 /// Reads `LLM_PROVIDER` (default `openai`) and maps to goose's own variables:
 ///   - `GOOSE_PROVIDER`   — which provider plugin goose should use
 ///   - `OPENAI_API_KEY`   — API key forwarded for OpenAI-compatible providers
@@ -49,15 +102,37 @@ fn first_env(vars: &[&str]) -> Option<String> {
 /// Azure: goose receives `GOOSE_PROVIDER=azure`; the `AZURE_OPENAI_*` variables
 /// are already in the environment and are inherited automatically.
 fn llm_env_for_goose() -> Vec<(String, String)> {
-    let provider = std::env::var("LLM_PROVIDER")
-        .unwrap_or_else(|_| "openai".to_string())
-        .to_lowercase();
+    let cfg = load_app_config();
+
+    // Helper: env var → config.yaml fallback → empty string
+    let resolve = |env_var: &str, yaml_val: &str| -> String {
+        std::env::var(env_var)
+            .unwrap_or_default()
+            .trim()
+            .to_string()
+            .or_if_empty(yaml_val.trim().to_string())
+    };
+
+    let provider = resolve("LLM_PROVIDER", &cfg.llm.provider)
+        .to_lowercase()
+        .or_if_empty("openai".to_string());
 
     let mut env: Vec<(String, String)> = Vec::new();
 
     if provider == "azure" {
         env.push(("GOOSE_PROVIDER".to_string(), "azure".to_string()));
-        // AZURE_OPENAI_* vars are inherited from the process environment.
+        // Inject Azure vars from config if not already in the environment.
+        for (var, yaml) in [
+            ("AZURE_OPENAI_API_KEY",    cfg.llm.api_key.as_str()),
+            ("AZURE_OPENAI_ENDPOINT",   cfg.llm.azure.endpoint.as_str()),
+            ("AZURE_OPENAI_DEPLOYMENT", cfg.llm.azure.deployment.as_str()),
+            ("AZURE_OPENAI_API_VERSION",cfg.llm.azure.api_version.as_str()),
+        ] {
+            let val = resolve(var, yaml);
+            if !val.is_empty() {
+                env.push((var.to_string(), val));
+            }
+        }
         return env;
     }
 
@@ -96,26 +171,40 @@ fn llm_env_for_goose() -> Vec<(String, String)> {
 
     env.push(("GOOSE_PROVIDER".to_string(), goose_provider.to_string()));
 
-    // Base URL: LLM_BASE_URL takes precedence over the provider default.
-    let base_url = std::env::var("LLM_BASE_URL")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .or_else(|| default_base.map(|s| s.to_string()));
-    if let Some(url) = base_url {
-        env.push(("OPENAI_BASE_URL".to_string(), url));
+    // Base URL: env var > config.yaml > provider default
+    let base_url = resolve("LLM_BASE_URL", &cfg.llm.base_url)
+        .or_if_empty(default_base.unwrap_or("").to_string());
+    if !base_url.is_empty() {
+        env.push(("OPENAI_BASE_URL".to_string(), base_url));
     }
 
-    // API key: first non-empty variable in the fallback chain.
-    if let Some(key) = first_env(key_vars) {
-        env.push(("OPENAI_API_KEY".to_string(), key));
+    // API key: env var chain > config.yaml api_key
+    let api_key = first_env(key_vars)
+        .unwrap_or_default()
+        .or_if_empty(cfg.llm.api_key.clone());
+    if !api_key.is_empty() {
+        env.push(("OPENAI_API_KEY".to_string(), api_key));
     }
 
-    // Model: LLM_MODEL overrides the provider default.
-    let model = std::env::var("LLM_MODEL")
-        .unwrap_or_else(|_| default_model.to_string());
+    // Model: env var > config.yaml > provider default
+    let model = resolve("LLM_MODEL", &cfg.llm.model)
+        .or_if_empty(default_model.to_string());
     env.push(("GOOSE_MODEL".to_string(), model));
 
     env
+}
+
+// ---------------------------------------------------------------------------
+// String helper — not in std
+// ---------------------------------------------------------------------------
+
+trait OrIfEmpty {
+    fn or_if_empty(self, fallback: String) -> String;
+}
+impl OrIfEmpty for String {
+    fn or_if_empty(self, fallback: String) -> String {
+        if self.is_empty() { fallback } else { self }
+    }
 }
 
 /// Stream every line from a spawned process to the frontend as an `agent-log` event.

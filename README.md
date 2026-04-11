@@ -210,12 +210,43 @@ RusTerminal/
 ├── index.html                    # Vite HTML shell
 ├── vite.config.js                # Vite + Vue plugin config
 ├── tailwind.config.js            # Custom colour palette
-└── package.json                  # npm dependencies
+├── package.json                  # npm dependencies
+├── build.sh                      # One-command from-scratch build script
+├── config.example.yaml           # Template LLM + agent config (safe to commit)
+└── config.yaml                   # Your local config with API keys (gitignored)
 ```
 
 ---
 
 ## Getting Started
+
+### Option A — One-command build (recommended)
+
+```bash
+git clone https://github.com/xhyccc/RusTerminal.git
+cd RusTerminal
+bash build.sh --deps-only    # install all deps + create config.yaml from the template
+```
+
+Then edit `config.yaml` to fill in your LLM provider and API key, and run:
+
+```bash
+bash build.sh --dev     # launch dev server with hot-reload
+# or
+bash build.sh           # build production installer
+```
+
+`build.sh` flags:
+
+| Flag | Effect |
+|---|---|
+| *(none)* | Install deps + build production Tauri app |
+| `--dev` | Install deps + launch dev server (hot-reload) |
+| `--deps-only` | Install deps only, print next-steps |
+
+---
+
+### Option B — Manual steps
 
 ### Prerequisites
 
@@ -229,7 +260,7 @@ RusTerminal/
 **Install Python dependencies:**
 
 ```bash
-pip install backtrader akshare langchain langchain-openai
+pip install backtrader akshare "langchain>=0.2" "langchain-openai>=0.1" pyyaml
 ```
 
 **Install goose (optional but recommended):**
@@ -252,6 +283,10 @@ npm install
 
 # Install Tauri CLI (first time only)
 cargo install tauri-cli --version "^2"
+
+# Create your local config file
+cp config.example.yaml config.yaml
+# → Edit config.yaml to set your LLM provider and API key
 ```
 
 ### Running in Development
@@ -283,42 +318,43 @@ Produces a native installer in `src-tauri/target/release/bundle/`.
 
 ### Step 1 — Configure your LLM provider
 
-Both goose (primary engine) and the Python fallback share the same set of
-environment variables.  Set `LLM_PROVIDER` to one of the supported providers
-and supply the matching API key:
+The easiest way is to edit `config.yaml` (created automatically by `build.sh`,
+or copy it manually with `cp config.example.yaml config.yaml`):
 
-```bash
-# OpenAI (default)
-export LLM_PROVIDER=openai
-export LLM_API_KEY=sk-...           # or export OPENAI_API_KEY=sk-...
+```yaml
+# config.yaml
+llm:
+  provider: openai          # openai | kimi | glm | siliconflow | azure
+  api_key:  "sk-..."        # your API key
 
-# Kimi (Moonshot AI)
-export LLM_PROVIDER=kimi
-export LLM_API_KEY=<moonshot-key>   # or export KIMI_API_KEY=<moonshot-key>
-
-# GLM (Zhipu AI)
-export LLM_PROVIDER=glm
-export LLM_API_KEY=<zhipu-key>      # or export GLM_API_KEY=<zhipu-key>
-
-# SiliconFlow
-export LLM_PROVIDER=siliconflow
-export LLM_API_KEY=<sf-key>         # or export SILICONFLOW_API_KEY=<sf-key>
-
-# Azure OpenAI
-export LLM_PROVIDER=azure
-export AZURE_OPENAI_API_KEY=<key>
-export AZURE_OPENAI_ENDPOINT=https://<resource>.openai.azure.com/
-export AZURE_OPENAI_DEPLOYMENT=<deployment-name>
-# export AZURE_OPENAI_API_VERSION=2024-02-01   # optional, shown default
-
-# Optional overrides (any provider)
-export LLM_MODEL=<model-name>       # override the provider's default model
-export LLM_BASE_URL=<url>           # override the API base URL
+  # Optional — override when needed:
+  # model:    "gpt-4o-mini"
+  # base_url: "https://api.openai.com/v1"
 ```
 
-If none of the above is set, the Python fallback uses its built-in
-`template_bt.py` without calling an LLM.  Goose manages its own model when
-it is configured separately via `goose configure`.
+**Supported providers at a glance:**
+
+| Provider | `provider` value | Default model |
+|---|---|---|
+| OpenAI | `openai` | `gpt-4o-mini` |
+| Kimi (Moonshot AI) | `kimi` | `moonshot-v1-8k` |
+| GLM (Zhipu AI) | `glm` | `glm-4-flash` |
+| SiliconFlow | `siliconflow` | `Qwen/Qwen2.5-7B-Instruct` |
+| Azure OpenAI | `azure` | see `azure:` block in config |
+
+> **Note — "coding plan" subscriptions:** This app calls the standard Chat
+> Completions endpoint (`/v1/chat/completions`).  If your LLM subscription is
+> a "coding" tier, check that chat completions are included.  If they are,
+> simply set the correct `base_url` and `model` in `config.yaml` and everything
+> will work.  When in doubt, test with:
+> ```bash
+> curl -H "Authorization: Bearer $YOUR_KEY" \
+>      "$YOUR_BASE_URL/chat/completions" \
+>      -d '{"model":"<model>","messages":[{"role":"user","content":"hi"}]}'
+> ```
+
+You can also use environment variables instead of (or in addition to) the YAML
+file — env vars always take precedence over `config.yaml` values.
 
 ### Step 2 — Launch the app
 
@@ -534,24 +570,42 @@ All persistence is plain JSON on disk — no database, no cloud, no telemetry.
 
 ## Configuration
 
+### `config.yaml` (primary — recommended)
+
+Copy `config.example.yaml` → `config.yaml` (done automatically by `build.sh`).
+Edit it to set your LLM provider, key, and agent options.  The file is gitignored.
+
+```yaml
+llm:
+  provider: openai          # openai | kimi | glm | siliconflow | azure
+  api_key:  ""              # your API key (or use env var)
+  model:    ""              # leave blank for provider default
+  base_url: ""              # leave blank for provider default
+  azure:                    # only needed when provider: azure
+    endpoint:    ""
+    deployment:  ""
+    api_version: "2024-02-01"
+
+agent:
+  max_retries: 5            # reduce if your plan has strict rate limits
+  backtest:
+    start_date:   "2022-01-01"
+    end_date:     "2023-12-31"
+    initial_cash: 100000
+```
+
+### Other configurable settings
+
 | File | Key setting | Default |
 |---|---|---|
+| `config.yaml` | LLM provider, model, key, backtest dates | see above |
 | `src-tauri/tauri.conf.json` | Window size | 1400 × 900 px |
 | `src-tauri/tauri.conf.json` | Min window size | 1024 × 600 px |
 | `python_agent/quant_strategy.yaml` | `max_retries` | 5 |
 | `python_agent/quant_strategy.yaml` | `workspace_dir` | `python_agent/workspace` |
-| `python_agent/agent_loop.py` | `MAX_RETRIES` | 5 |
 | `market_engine.rs` | Heartbeat interval | 60 s |
 | `MonitorPanel.vue` | Poll interval | 30 s |
 | `AgentTerminal.vue` | Terminal scrollback | 5 000 lines |
-
-Backtest defaults (set inside generated strategy scripts):
-
-| Parameter | Default |
-|---|---|
-| Start date | 2022-01-01 |
-| End date | 2023-12-31 |
-| Initial cash | ¥100,000 CNY |
 
 ---
 

@@ -6,3 +6,5 @@ python_agent/workspace/temp_strategy.py
 python_agent/workspace/report.json
 *.pyc
 __pycache__/
+# User config — contains API keys; do NOT commit
+config.yaml
