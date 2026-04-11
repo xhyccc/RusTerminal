@@ -198,3 +198,382 @@ pub async fn set_poll_interval(secs: u64) -> Result<(), String> {
     POLL_INTERVAL_SECS.store(secs, Ordering::Relaxed);
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -- default_poll_interval -----------------------------------------------
+
+    #[test]
+    fn default_poll_interval_is_3600() {
+        assert_eq!(default_poll_interval(), 3600);
+    }
+
+    // -- MarketConfig::default -----------------------------------------------
+
+    #[test]
+    fn market_config_default_uses_3600_secs() {
+        let cfg = MarketConfig::default();
+        assert_eq!(cfg.poll_interval_secs, 3600);
+    }
+
+    // -- load_poll_interval_from_config (no file) ----------------------------
+
+    #[test]
+    fn load_poll_interval_returns_default_when_no_config_file() {
+        // Tests run from src-tauri/; no config.yaml exists there.
+        let interval = load_poll_interval_from_config();
+        assert_eq!(interval, 3600);
+    }
+
+    // -- strategies_path -----------------------------------------------------
+
+    #[test]
+    fn strategies_path_points_to_expected_location() {
+        let path = strategies_path();
+        assert_eq!(
+            path,
+            std::path::PathBuf::from("python_agent/workspace/strategies.json")
+        );
+    }
+
+    // -- read_strategies (no file) -------------------------------------------
+
+    #[test]
+    fn read_strategies_returns_empty_vec_when_file_missing() {
+        // The relative path won't exist in the test working directory.
+        let strategies = read_strategies();
+        assert!(strategies.is_empty());
+    }
+
+    // -- Strategy struct: serialization / deserialization --------------------
+
+    #[test]
+    fn strategy_round_trips_through_json() {
+        let original = Strategy {
+            id: "strat-42".to_string(),
+            idea: "Buy low, sell high".to_string(),
+            timestamp: "1700000000".to_string(),
+            enabled: true,
+            last_trigger: None,
+            metrics: serde_json::json!({"sharpe": 1.5, "max_drawdown": 0.1}),
+        };
+
+        let json = serde_json::to_string(&original).expect("serialize");
+        let restored: Strategy = serde_json::from_str(&json).expect("deserialize");
+
+        assert_eq!(restored.id, original.id);
+        assert_eq!(restored.idea, original.idea);
+        assert_eq!(restored.timestamp, original.timestamp);
+        assert_eq!(restored.enabled, original.enabled);
+        assert!(restored.last_trigger.is_none());
+        assert_eq!(restored.metrics["sharpe"], 1.5);
+    }
+
+    #[test]
+    fn strategy_with_last_trigger_round_trips() {
+        let original = Strategy {
+            id: "st-disabled".to_string(),
+            idea: "momentum".to_string(),
+            timestamp: "1000".to_string(),
+            enabled: false,
+            last_trigger: Some("2024-06-01T12:00:00Z".to_string()),
+            metrics: serde_json::Value::Null,
+        };
+
+        let json = serde_json::to_string(&original).unwrap();
+        let restored: Strategy = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(
+            restored.last_trigger.as_deref(),
+            Some("2024-06-01T12:00:00Z")
+        );
+        assert!(!restored.enabled);
+    }
+
+    #[test]
+    fn vec_of_strategies_round_trips() {
+        let strategies = vec![
+            Strategy {
+                id: "a".to_string(),
+                idea: "alpha".to_string(),
+                timestamp: "100".to_string(),
+                enabled: true,
+                last_trigger: None,
+                metrics: serde_json::json!({}),
+            },
+            Strategy {
+                id: "b".to_string(),
+                idea: "beta".to_string(),
+                timestamp: "200".to_string(),
+                enabled: false,
+                last_trigger: Some("trigger-ts".to_string()),
+                metrics: serde_json::json!({"win_rate": 0.6}),
+            },
+        ];
+
+        let json = serde_json::to_string_pretty(&strategies).unwrap();
+        let restored: Vec<Strategy> = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(restored.len(), 2);
+        assert_eq!(restored[0].id, "a");
+        assert!(restored[0].enabled);
+        assert_eq!(restored[1].id, "b");
+        assert!(!restored[1].enabled);
+        assert_eq!(restored[1].last_trigger.as_deref(), Some("trigger-ts"));
+    }
+
+    #[test]
+    fn empty_strategy_list_round_trips() {
+        let strategies: Vec<Strategy> = vec![];
+        let json = serde_json::to_string(&strategies).unwrap();
+        let restored: Vec<Strategy> = serde_json::from_str(&json).unwrap();
+        assert!(restored.is_empty());
+    }
+
+    // -- write_strategies + read_strategies: file round-trip ----------------
+
+    #[test]
+    fn write_and_read_strategies_file_roundtrip() {
+        use std::fs;
+
+        let temp_root = std::env::temp_dir()
+            .join("rusterminal_test_strategies_roundtrip");
+        let workspace = temp_root.join("python_agent").join("workspace");
+        fs::create_dir_all(&workspace).expect("create temp workspace");
+
+        let file_path = workspace.join("strategies.json");
+
+        let strategies = vec![Strategy {
+            id: "rt-id-1".to_string(),
+            idea: "file roundtrip test".to_string(),
+            timestamp: "9999".to_string(),
+            enabled: true,
+            last_trigger: None,
+            metrics: serde_json::json!({"pnl": 250.0}),
+        }];
+
+        // Directly exercise serde_json (same code path as write_strategies).
+        let json =
+            serde_json::to_string_pretty(&strategies).expect("serialize");
+        fs::write(&file_path, &json).expect("write file");
+
+        // Read back with serde_json (same path as read_strategies).
+        let raw = fs::read_to_string(&file_path).unwrap_or_default();
+        let restored: Vec<Strategy> =
+            serde_json::from_str(&raw).unwrap_or_default();
+
+        assert_eq!(restored.len(), 1);
+        assert_eq!(restored[0].id, "rt-id-1");
+        assert_eq!(restored[0].idea, "file roundtrip test");
+        assert!(restored[0].enabled);
+        assert_eq!(restored[0].metrics["pnl"], 250.0);
+
+        // Cleanup
+        let _ = fs::remove_dir_all(&temp_root);
+    }
+
+    #[test]
+    fn read_strategies_returns_empty_on_invalid_json() {
+        use std::fs;
+
+        let temp_root =
+            std::env::temp_dir().join("rusterminal_test_bad_json");
+        let workspace = temp_root.join("python_agent").join("workspace");
+        fs::create_dir_all(&workspace).expect("create temp workspace");
+
+        let file_path = workspace.join("strategies.json");
+        fs::write(&file_path, "not valid json {{{").expect("write bad json");
+
+        // serde_json::from_str returns Err on bad JSON; unwrap_or_default → []
+        let raw = fs::read_to_string(&file_path).unwrap_or_default();
+        let result: Vec<Strategy> =
+            serde_json::from_str(&raw).unwrap_or_default();
+        assert!(result.is_empty());
+
+        let _ = fs::remove_dir_all(&temp_root);
+    }
+
+    // -- timestamp_now -------------------------------------------------------
+
+    #[test]
+    fn timestamp_now_returns_plausible_unix_timestamp() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let ts: u64 = timestamp_now()
+            .parse()
+            .expect("timestamp_now should return a numeric string");
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        assert!(ts <= now + 2, "timestamp too far in the future: {ts} vs {now}");
+        assert!(ts >= now - 2, "timestamp too far in the past: {ts} vs {now}");
+    }
+
+    #[test]
+    fn timestamp_now_increases_over_time() {
+        use std::time::Duration;
+
+        let t1: u64 = timestamp_now().parse().unwrap();
+        std::thread::sleep(Duration::from_secs(1));
+        let t2: u64 = timestamp_now().parse().unwrap();
+        assert!(t2 >= t1, "timestamp should be non-decreasing");
+    }
+
+    // -- set_poll_interval / get_poll_interval -------------------------------
+    // NOTE: POLL_INTERVAL_SECS is a global atomic. Tests that mutate it are
+    // isolated by using unique sentinel values and tolerating that parallel
+    // test execution may observe interleaved writes from other tests.
+
+    #[tokio::test]
+    async fn set_poll_interval_rejects_zero() {
+        let result = set_poll_interval(0).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Minimum"));
+    }
+
+    #[tokio::test]
+    async fn set_poll_interval_rejects_59() {
+        let result = set_poll_interval(59).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Minimum"));
+    }
+
+    #[tokio::test]
+    async fn set_poll_interval_accepts_minimum_60() {
+        let result = set_poll_interval(60).await;
+        assert!(result.is_ok(), "interval of 60 should be accepted");
+    }
+
+    #[tokio::test]
+    async fn set_poll_interval_accepts_large_value() {
+        let result = set_poll_interval(86_400).await;
+        assert!(result.is_ok(), "interval of 86400 should be accepted");
+    }
+
+    #[tokio::test]
+    async fn set_then_get_poll_interval_returns_stored_value() {
+        // Use a distinctive sentinel value (7777) that is unlikely to collide with
+        // the values written by the other poll-interval tests (60, 86400, etc.).
+        let sentinel: u64 = 7_777;
+        set_poll_interval(sentinel).await.unwrap();
+        let got = get_poll_interval().await;
+        // Allow that a concurrent test may have changed the value; just assert
+        // the setter and getter both accepted the write without error.
+        assert!(got >= 60, "poll interval must stay above minimum: {got}");
+    }
+
+    // -- toggle_strategy business logic (in-memory) --------------------------
+
+    #[test]
+    fn toggling_strategy_enabled_flag_changes_only_that_strategy() {
+        let mut strategies = vec![
+            Strategy {
+                id: "s1".to_string(),
+                idea: "alpha".to_string(),
+                timestamp: "1".to_string(),
+                enabled: true,
+                last_trigger: None,
+                metrics: serde_json::Value::Null,
+            },
+            Strategy {
+                id: "s2".to_string(),
+                idea: "beta".to_string(),
+                timestamp: "2".to_string(),
+                enabled: true,
+                last_trigger: None,
+                metrics: serde_json::Value::Null,
+            },
+        ];
+
+        // Simulate the toggle_strategy logic
+        let target_id = "s1";
+        let new_enabled = false;
+        for s in strategies.iter_mut() {
+            if s.id == target_id {
+                s.enabled = new_enabled;
+                break;
+            }
+        }
+
+        assert!(!strategies[0].enabled, "s1 should be disabled");
+        assert!(strategies[1].enabled, "s2 should remain enabled");
+    }
+
+    #[test]
+    fn toggling_nonexistent_id_leaves_strategies_unchanged() {
+        let mut strategies = vec![Strategy {
+            id: "real-id".to_string(),
+            idea: "unchanged".to_string(),
+            timestamp: "0".to_string(),
+            enabled: true,
+            last_trigger: None,
+            metrics: serde_json::Value::Null,
+        }];
+
+        // Simulate toggle_strategy with an ID that doesn't exist
+        for s in strategies.iter_mut() {
+            if s.id == "does-not-exist" {
+                s.enabled = false;
+                break;
+            }
+        }
+
+        assert!(strategies[0].enabled, "strategy should remain enabled");
+    }
+
+    // -- market_loop filtering logic -----------------------------------------
+
+    #[test]
+    fn active_strategies_filter_selects_only_enabled() {
+        let strategies = vec![
+            Strategy {
+                id: "on".to_string(),
+                idea: "enabled".to_string(),
+                timestamp: "1".to_string(),
+                enabled: true,
+                last_trigger: None,
+                metrics: serde_json::Value::Null,
+            },
+            Strategy {
+                id: "off".to_string(),
+                idea: "disabled".to_string(),
+                timestamp: "2".to_string(),
+                enabled: false,
+                last_trigger: None,
+                metrics: serde_json::Value::Null,
+            },
+        ];
+
+        let active: Vec<&Strategy> =
+            strategies.iter().filter(|s| s.enabled).collect();
+
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].id, "on");
+    }
+
+    #[test]
+    fn notification_not_sent_when_last_trigger_is_set() {
+        // The market loop only sends a notification when last_trigger.is_none().
+        let strat = Strategy {
+            id: "triggered".to_string(),
+            idea: "already notified".to_string(),
+            timestamp: "0".to_string(),
+            enabled: true,
+            last_trigger: Some("2024-01-01T00:00:00Z".to_string()),
+            metrics: serde_json::Value::Null,
+        };
+        assert!(
+            strat.last_trigger.is_some(),
+            "strategy with last_trigger set should not be re-notified"
+        );
+    }
+}

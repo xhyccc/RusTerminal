@@ -213,6 +213,348 @@ impl OrIfEmpty for String {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::env;
+
+    // -- OrIfEmpty -----------------------------------------------------------
+
+    #[test]
+    fn or_if_empty_returns_self_when_non_empty() {
+        let s = "hello".to_string();
+        assert_eq!(s.or_if_empty("fallback".to_string()), "hello");
+    }
+
+    #[test]
+    fn or_if_empty_returns_fallback_when_empty() {
+        let s = String::new();
+        assert_eq!(s.or_if_empty("fallback".to_string()), "fallback");
+    }
+
+    #[test]
+    fn or_if_empty_with_empty_fallback() {
+        let s = String::new();
+        assert_eq!(s.or_if_empty(String::new()), "");
+    }
+
+    // -- first_env -----------------------------------------------------------
+
+    #[test]
+    fn first_env_returns_none_when_all_unset() {
+        assert!(first_env(&["__TEST_UNSET_VAR_A1__", "__TEST_UNSET_VAR_A2__"]).is_none());
+    }
+
+    #[test]
+    fn first_env_returns_none_for_empty_slice() {
+        assert!(first_env(&[]).is_none());
+    }
+
+    #[test]
+    fn first_env_returns_first_non_empty_var() {
+        let key = "__FIRST_ENV_TEST_NON_EMPTY__";
+        env::set_var(key, "test_value");
+        let result = first_env(&["__UNSET_BEFORE__", key]);
+        env::remove_var(key);
+        assert_eq!(result.as_deref(), Some("test_value"));
+    }
+
+    #[test]
+    fn first_env_skips_empty_string_values() {
+        let empty_key = "__FIRST_ENV_EMPTY_STR__";
+        let val_key = "__FIRST_ENV_FOUND_STR__";
+        env::set_var(empty_key, "");
+        env::set_var(val_key, "found_it");
+        let result = first_env(&[empty_key, val_key]);
+        env::remove_var(empty_key);
+        env::remove_var(val_key);
+        assert_eq!(result.as_deref(), Some("found_it"));
+    }
+
+    #[test]
+    fn first_env_returns_first_when_multiple_set() {
+        let key1 = "__FIRST_ENV_MULTI_1__";
+        let key2 = "__FIRST_ENV_MULTI_2__";
+        env::set_var(key1, "first");
+        env::set_var(key2, "second");
+        let result = first_env(&[key1, key2]);
+        env::remove_var(key1);
+        env::remove_var(key2);
+        assert_eq!(result.as_deref(), Some("first"));
+    }
+
+    // -- load_app_config -----------------------------------------------------
+
+    #[test]
+    fn load_app_config_returns_default_when_no_file() {
+        // Tests run from src-tauri/; there is no config.yaml there.
+        let cfg = load_app_config();
+        assert_eq!(cfg.llm.provider, "");
+        assert_eq!(cfg.llm.api_key, "");
+        assert_eq!(cfg.llm.model, "");
+        assert_eq!(cfg.llm.base_url, "");
+    }
+
+    // -- llm_env_for_goose ---------------------------------------------------
+
+    /// Remove all LLM-related env vars so tests start from a clean slate.
+    fn clear_llm_env_vars() {
+        for v in &[
+            "LLM_PROVIDER",
+            "LLM_API_KEY",
+            "LLM_MODEL",
+            "LLM_BASE_URL",
+            "OPENAI_API_KEY",
+            "KIMI_API_KEY",
+            "GLM_API_KEY",
+            "SILICONFLOW_API_KEY",
+            "AZURE_OPENAI_API_KEY",
+            "AZURE_OPENAI_ENDPOINT",
+            "AZURE_OPENAI_DEPLOYMENT",
+            "AZURE_OPENAI_API_VERSION",
+        ] {
+            env::remove_var(v);
+        }
+    }
+
+    fn env_map(pairs: &[(String, String)]) -> std::collections::HashMap<String, String> {
+        pairs.iter().cloned().collect()
+    }
+
+    #[test]
+    fn llm_env_default_provider_is_openai_when_no_provider_set() {
+        clear_llm_env_vars();
+        let vars = env_map(&llm_env_for_goose());
+        assert_eq!(vars.get("GOOSE_PROVIDER").map(String::as_str), Some("openai"));
+    }
+
+    #[test]
+    fn llm_env_openai_sets_default_model() {
+        clear_llm_env_vars();
+        env::set_var("LLM_PROVIDER", "openai");
+        let vars = env_map(&llm_env_for_goose());
+        env::remove_var("LLM_PROVIDER");
+        assert_eq!(vars.get("GOOSE_MODEL").map(String::as_str), Some("gpt-4o-mini"));
+        assert_eq!(vars.get("GOOSE_PROVIDER").map(String::as_str), Some("openai"));
+    }
+
+    #[test]
+    fn llm_env_kimi_sets_base_url_and_default_model() {
+        clear_llm_env_vars();
+        env::set_var("LLM_PROVIDER", "kimi");
+        let vars = env_map(&llm_env_for_goose());
+        env::remove_var("LLM_PROVIDER");
+        assert_eq!(
+            vars.get("OPENAI_BASE_URL").map(String::as_str),
+            Some("https://api.moonshot.cn/v1")
+        );
+        assert_eq!(
+            vars.get("GOOSE_MODEL").map(String::as_str),
+            Some("moonshot-v1-8k")
+        );
+    }
+
+    #[test]
+    fn llm_env_glm_sets_base_url_and_default_model() {
+        clear_llm_env_vars();
+        env::set_var("LLM_PROVIDER", "glm");
+        let vars = env_map(&llm_env_for_goose());
+        env::remove_var("LLM_PROVIDER");
+        assert_eq!(
+            vars.get("OPENAI_BASE_URL").map(String::as_str),
+            Some("https://open.bigmodel.cn/api/paas/v4")
+        );
+        assert_eq!(
+            vars.get("GOOSE_MODEL").map(String::as_str),
+            Some("glm-4-flash")
+        );
+    }
+
+    #[test]
+    fn llm_env_siliconflow_sets_base_url_and_default_model() {
+        clear_llm_env_vars();
+        env::set_var("LLM_PROVIDER", "siliconflow");
+        let vars = env_map(&llm_env_for_goose());
+        env::remove_var("LLM_PROVIDER");
+        assert_eq!(
+            vars.get("OPENAI_BASE_URL").map(String::as_str),
+            Some("https://api.siliconflow.cn/v1")
+        );
+        assert_eq!(
+            vars.get("GOOSE_MODEL").map(String::as_str),
+            Some("Qwen/Qwen2.5-7B-Instruct")
+        );
+    }
+
+    #[test]
+    fn llm_env_azure_sets_goose_provider_to_azure() {
+        clear_llm_env_vars();
+        env::set_var("LLM_PROVIDER", "azure");
+        let vars = env_map(&llm_env_for_goose());
+        env::remove_var("LLM_PROVIDER");
+        assert_eq!(vars.get("GOOSE_PROVIDER").map(String::as_str), Some("azure"));
+        // Azure path returns early and must NOT set GOOSE_MODEL
+        assert!(
+            vars.get("GOOSE_MODEL").is_none(),
+            "Azure path should not set GOOSE_MODEL"
+        );
+    }
+
+    #[test]
+    fn llm_env_azure_injects_azure_vars_from_env() {
+        clear_llm_env_vars();
+        env::set_var("LLM_PROVIDER", "azure");
+        env::set_var("AZURE_OPENAI_API_KEY", "az-key");
+        env::set_var("AZURE_OPENAI_ENDPOINT", "https://my.openai.azure.com");
+        let vars = env_map(&llm_env_for_goose());
+        env::remove_var("LLM_PROVIDER");
+        env::remove_var("AZURE_OPENAI_API_KEY");
+        env::remove_var("AZURE_OPENAI_ENDPOINT");
+        assert_eq!(
+            vars.get("AZURE_OPENAI_API_KEY").map(String::as_str),
+            Some("az-key")
+        );
+        assert_eq!(
+            vars.get("AZURE_OPENAI_ENDPOINT").map(String::as_str),
+            Some("https://my.openai.azure.com")
+        );
+    }
+
+    #[test]
+    fn llm_env_api_key_forwarded_for_openai() {
+        clear_llm_env_vars();
+        env::set_var("LLM_PROVIDER", "openai");
+        env::set_var("OPENAI_API_KEY", "sk-test-key");
+        let vars = env_map(&llm_env_for_goose());
+        env::remove_var("LLM_PROVIDER");
+        env::remove_var("OPENAI_API_KEY");
+        assert_eq!(
+            vars.get("OPENAI_API_KEY").map(String::as_str),
+            Some("sk-test-key")
+        );
+    }
+
+    #[test]
+    fn llm_env_no_api_key_omitted_from_result() {
+        clear_llm_env_vars();
+        env::set_var("LLM_PROVIDER", "openai");
+        let vars = env_map(&llm_env_for_goose());
+        env::remove_var("LLM_PROVIDER");
+        assert!(
+            vars.get("OPENAI_API_KEY").is_none(),
+            "OPENAI_API_KEY should not appear when not set"
+        );
+    }
+
+    #[test]
+    fn llm_env_model_override_from_llm_model_env_var() {
+        clear_llm_env_vars();
+        env::set_var("LLM_PROVIDER", "openai");
+        env::set_var("LLM_MODEL", "gpt-4");
+        let vars = env_map(&llm_env_for_goose());
+        env::remove_var("LLM_PROVIDER");
+        env::remove_var("LLM_MODEL");
+        assert_eq!(vars.get("GOOSE_MODEL").map(String::as_str), Some("gpt-4"));
+    }
+
+    #[test]
+    fn llm_env_base_url_override_from_env_var() {
+        clear_llm_env_vars();
+        env::set_var("LLM_PROVIDER", "openai");
+        env::set_var("LLM_BASE_URL", "https://custom.openai.example.com/v1");
+        let vars = env_map(&llm_env_for_goose());
+        env::remove_var("LLM_PROVIDER");
+        env::remove_var("LLM_BASE_URL");
+        assert_eq!(
+            vars.get("OPENAI_BASE_URL").map(String::as_str),
+            Some("https://custom.openai.example.com/v1")
+        );
+    }
+
+    #[test]
+    fn llm_env_kimi_uses_kimi_api_key_first() {
+        clear_llm_env_vars();
+        env::set_var("LLM_PROVIDER", "kimi");
+        env::set_var("KIMI_API_KEY", "kimi-secret");
+        env::set_var("OPENAI_API_KEY", "should-not-be-used");
+        let vars = env_map(&llm_env_for_goose());
+        env::remove_var("LLM_PROVIDER");
+        env::remove_var("KIMI_API_KEY");
+        env::remove_var("OPENAI_API_KEY");
+        assert_eq!(
+            vars.get("OPENAI_API_KEY").map(String::as_str),
+            Some("kimi-secret")
+        );
+    }
+
+    #[test]
+    fn llm_env_glm_uses_glm_api_key_first() {
+        clear_llm_env_vars();
+        env::set_var("LLM_PROVIDER", "glm");
+        env::set_var("GLM_API_KEY", "glm-secret");
+        let vars = env_map(&llm_env_for_goose());
+        env::remove_var("LLM_PROVIDER");
+        env::remove_var("GLM_API_KEY");
+        assert_eq!(
+            vars.get("OPENAI_API_KEY").map(String::as_str),
+            Some("glm-secret")
+        );
+    }
+
+    #[test]
+    fn llm_env_siliconflow_uses_siliconflow_api_key_first() {
+        clear_llm_env_vars();
+        env::set_var("LLM_PROVIDER", "siliconflow");
+        env::set_var("SILICONFLOW_API_KEY", "sf-secret");
+        let vars = env_map(&llm_env_for_goose());
+        env::remove_var("LLM_PROVIDER");
+        env::remove_var("SILICONFLOW_API_KEY");
+        assert_eq!(
+            vars.get("OPENAI_API_KEY").map(String::as_str),
+            Some("sf-secret")
+        );
+    }
+
+    #[test]
+    fn llm_env_unknown_provider_defaults_to_openai() {
+        clear_llm_env_vars();
+        env::set_var("LLM_PROVIDER", "nonexistent_provider");
+        let vars = env_map(&llm_env_for_goose());
+        env::remove_var("LLM_PROVIDER");
+        assert_eq!(vars.get("GOOSE_PROVIDER").map(String::as_str), Some("openai"));
+        assert_eq!(vars.get("GOOSE_MODEL").map(String::as_str), Some("gpt-4o-mini"));
+    }
+
+    #[test]
+    fn llm_env_provider_matching_is_case_insensitive() {
+        clear_llm_env_vars();
+        env::set_var("LLM_PROVIDER", "KIMI");
+        let vars = env_map(&llm_env_for_goose());
+        env::remove_var("LLM_PROVIDER");
+        assert_eq!(
+            vars.get("OPENAI_BASE_URL").map(String::as_str),
+            Some("https://api.moonshot.cn/v1"),
+            "Provider matching should be case-insensitive"
+        );
+    }
+
+    #[test]
+    fn llm_env_openai_does_not_set_base_url_by_default() {
+        clear_llm_env_vars();
+        env::set_var("LLM_PROVIDER", "openai");
+        let vars = env_map(&llm_env_for_goose());
+        env::remove_var("LLM_PROVIDER");
+        assert!(
+            vars.get("OPENAI_BASE_URL").is_none(),
+            "OpenAI provider should not set OPENAI_BASE_URL unless explicitly configured"
+        );
+    }
+}
+
 /// Stream every line from a spawned process to the frontend as an `agent-log` event.
 fn stream_to_frontend(app_handle: &AppHandle, child: &mut std::process::Child) {
     if let Some(stdout) = child.stdout.take() {
