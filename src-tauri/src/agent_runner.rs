@@ -31,6 +31,93 @@ fn find_goose() -> Option<String> {
     None
 }
 
+/// Return the first non-empty value found among the given environment variable names.
+fn first_env(vars: &[&str]) -> Option<String> {
+    vars.iter()
+        .find_map(|v| std::env::var(v).ok().filter(|s| !s.is_empty()))
+}
+
+/// Build the list of extra environment variables to inject into the goose process
+/// so that it uses the same LLM provider / key / model as the Python fallback.
+///
+/// Reads `LLM_PROVIDER` (default `openai`) and maps to goose's own variables:
+///   - `GOOSE_PROVIDER`   — which provider plugin goose should use
+///   - `OPENAI_API_KEY`   — API key forwarded for OpenAI-compatible providers
+///   - `OPENAI_BASE_URL`  — custom endpoint for kimi / glm / siliconflow
+///   - `GOOSE_MODEL`      — model override (from `LLM_MODEL` or provider default)
+///
+/// Azure: goose receives `GOOSE_PROVIDER=azure`; the `AZURE_OPENAI_*` variables
+/// are already in the environment and are inherited automatically.
+fn llm_env_for_goose() -> Vec<(String, String)> {
+    let provider = std::env::var("LLM_PROVIDER")
+        .unwrap_or_else(|_| "openai".to_string())
+        .to_lowercase();
+
+    let mut env: Vec<(String, String)> = Vec::new();
+
+    if provider == "azure" {
+        env.push(("GOOSE_PROVIDER".to_string(), "azure".to_string()));
+        // AZURE_OPENAI_* vars are inherited from the process environment.
+        return env;
+    }
+
+    // Map provider → (goose_provider, default_base_url, api_key_vars, default_model)
+    let (goose_provider, default_base, key_vars, default_model): (
+        &str,
+        Option<&str>,
+        &[&str],
+        &str,
+    ) = match provider.as_str() {
+        "kimi" => (
+            "openai",
+            Some("https://api.moonshot.cn/v1"),
+            &["KIMI_API_KEY", "LLM_API_KEY", "OPENAI_API_KEY"],
+            "moonshot-v1-8k",
+        ),
+        "glm" => (
+            "openai",
+            Some("https://open.bigmodel.cn/api/paas/v4"),
+            &["GLM_API_KEY", "LLM_API_KEY", "OPENAI_API_KEY"],
+            "glm-4-flash",
+        ),
+        "siliconflow" => (
+            "openai",
+            Some("https://api.siliconflow.cn/v1"),
+            &["SILICONFLOW_API_KEY", "LLM_API_KEY", "OPENAI_API_KEY"],
+            "Qwen/Qwen2.5-7B-Instruct",
+        ),
+        _ => (
+            "openai",
+            None,
+            &["OPENAI_API_KEY", "LLM_API_KEY"],
+            "gpt-4o-mini",
+        ),
+    };
+
+    env.push(("GOOSE_PROVIDER".to_string(), goose_provider.to_string()));
+
+    // Base URL: LLM_BASE_URL takes precedence over the provider default.
+    let base_url = std::env::var("LLM_BASE_URL")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .or_else(|| default_base.map(|s| s.to_string()));
+    if let Some(url) = base_url {
+        env.push(("OPENAI_BASE_URL".to_string(), url));
+    }
+
+    // API key: first non-empty variable in the fallback chain.
+    if let Some(key) = first_env(key_vars) {
+        env.push(("OPENAI_API_KEY".to_string(), key));
+    }
+
+    // Model: LLM_MODEL overrides the provider default.
+    let model = std::env::var("LLM_MODEL")
+        .unwrap_or_else(|_| default_model.to_string());
+    env.push(("GOOSE_MODEL".to_string(), model));
+
+    env
+}
+
 /// Stream every line from a spawned process to the frontend as an `agent-log` event.
 fn stream_to_frontend(app_handle: &AppHandle, child: &mut std::process::Child) {
     if let Some(stdout) = child.stdout.take() {
@@ -57,6 +144,7 @@ async fn run_with_goose(
 
     let mut child = Command::new(&goose_bin)
         .args(["run", "--recipe", recipe, "--params", &params, "--no-session"])
+        .envs(llm_env_for_goose())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()

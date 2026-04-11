@@ -115,17 +115,109 @@ Rules:
 """
 
 
+# ---------------------------------------------------------------------------
+# LLM provider configuration
+# ---------------------------------------------------------------------------
+# Set LLM_PROVIDER to one of: openai, kimi, glm, siliconflow, azure
+# Set LLM_API_KEY  for the chosen provider (or use the provider-specific key).
+# Set LLM_MODEL    to override the default model for the provider.
+# Set LLM_BASE_URL to override the API base URL (for any OpenAI-compatible provider).
+#
+# Provider-specific API key env vars (checked before LLM_API_KEY):
+#   openai      → OPENAI_API_KEY
+#   kimi        → KIMI_API_KEY
+#   glm         → GLM_API_KEY
+#   siliconflow → SILICONFLOW_API_KEY
+#   azure       → AZURE_OPENAI_API_KEY  (also needs AZURE_OPENAI_ENDPOINT,
+#                                         AZURE_OPENAI_DEPLOYMENT, optionally
+#                                         AZURE_OPENAI_API_VERSION)
+# ---------------------------------------------------------------------------
+
+_PROVIDER_DEFAULTS: dict[str, dict] = {
+    "openai":      {"base_url": None,                                    "model": "gpt-4o-mini"},
+    "kimi":        {"base_url": "https://api.moonshot.cn/v1",            "model": "moonshot-v1-8k"},
+    "glm":         {"base_url": "https://open.bigmodel.cn/api/paas/v4",  "model": "glm-4-flash"},
+    "siliconflow": {"base_url": "https://api.siliconflow.cn/v1",         "model": "Qwen/Qwen2.5-7B-Instruct"},
+}
+
+_PROVIDER_KEY_VARS: dict[str, list[str]] = {
+    "openai":      ["OPENAI_API_KEY", "LLM_API_KEY"],
+    "kimi":        ["KIMI_API_KEY",        "LLM_API_KEY", "OPENAI_API_KEY"],
+    "glm":         ["GLM_API_KEY",         "LLM_API_KEY", "OPENAI_API_KEY"],
+    "siliconflow": ["SILICONFLOW_API_KEY", "LLM_API_KEY", "OPENAI_API_KEY"],
+}
+
+
+def _resolve_api_key(provider: str) -> str:
+    for var in _PROVIDER_KEY_VARS.get(provider, ["LLM_API_KEY", "OPENAI_API_KEY"]):
+        val = os.environ.get(var, "")
+        if val:
+            return val
+    return ""
+
+
+def _build_azure_llm():
+    """Build an AzureChatOpenAI client from AZURE_OPENAI_* env vars."""
+    api_key  = os.environ.get("AZURE_OPENAI_API_KEY", "")
+    endpoint = os.environ.get("AZURE_OPENAI_ENDPOINT", "")
+    deploy   = os.environ.get("AZURE_OPENAI_DEPLOYMENT", "")
+    version  = os.environ.get("AZURE_OPENAI_API_VERSION", "2024-02-01")
+
+    if not (api_key and endpoint and deploy):
+        return None
+
+    try:
+        from langchain_openai import AzureChatOpenAI
+        return AzureChatOpenAI(
+            azure_deployment=deploy,
+            azure_endpoint=endpoint,
+            api_key=api_key,
+            api_version=version,
+            temperature=0.2,
+        )
+    except ImportError:
+        try:
+            from langchain.chat_models import AzureChatOpenAI  # type: ignore
+            return AzureChatOpenAI(
+                deployment_name=deploy,
+                openai_api_base=endpoint,
+                openai_api_key=api_key,
+                openai_api_version=version,
+                temperature=0.2,
+            )
+        except ImportError:
+            return None
+
+
 def _build_llm():
-    api_key = os.environ.get("OPENAI_API_KEY", "")
+    """Build a LangChain chat model based on LLM_PROVIDER (default: openai)."""
+    provider = os.environ.get("LLM_PROVIDER", "openai").lower()
+
+    if provider == "azure":
+        return _build_azure_llm()
+
+    api_key = _resolve_api_key(provider)
     if not api_key:
         return None
+
+    defaults = _PROVIDER_DEFAULTS.get(provider, _PROVIDER_DEFAULTS["openai"])
+    # LLM_BASE_URL overrides the provider's default base URL
+    base_url = os.environ.get("LLM_BASE_URL") or defaults["base_url"]
+    model    = os.environ.get("LLM_MODEL")    or defaults["model"]
+
     try:
         from langchain_openai import ChatOpenAI
-        return ChatOpenAI(model="gpt-4o-mini", temperature=0.2, api_key=api_key)
+        kwargs: dict = {"model": model, "temperature": 0.2, "api_key": api_key}
+        if base_url:
+            kwargs["base_url"] = base_url
+        return ChatOpenAI(**kwargs)
     except ImportError:
         try:
             from langchain.chat_models import ChatOpenAI  # type: ignore
-            return ChatOpenAI(model_name="gpt-4o-mini", temperature=0.2, openai_api_key=api_key)
+            kwargs = {"model_name": model, "temperature": 0.2, "openai_api_key": api_key}
+            if base_url:
+                kwargs["openai_api_base"] = base_url
+            return ChatOpenAI(**kwargs)
         except ImportError:
             return None
 
@@ -214,7 +306,12 @@ def _python_fallback(idea: str) -> None:
 
     llm = _build_llm()
     if llm is None:
-        print("[AGENT_THINKING] No OPENAI_API_KEY — using built-in template", flush=True)
+        provider = os.environ.get("LLM_PROVIDER", "openai")
+        print(
+            f"[AGENT_THINKING] No API key found for provider '{provider}' "
+            "— using built-in template",
+            flush=True,
+        )
 
     template = (AGENT_DIR / "template_bt.py").read_text()
 

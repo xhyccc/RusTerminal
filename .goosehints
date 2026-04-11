@@ -66,9 +66,21 @@ Any file in `python_agent/workspace/temp_strategy.py` must:
 
 ## Environment variables
 
+The app uses a unified set of variables understood by **both** the goose agent
+and the Python fallback (LangChain).  `agent_runner.rs` translates these to
+goose's native variables automatically when spawning the goose subprocess.
+
 | Variable | Purpose |
 |----------|---------|
-| `GOOSE_PROVIDER` | AI provider (`openai`, `anthropic`, `ollama`, …) |
-| `GOOSE_MODEL` | Model name (e.g. `gpt-4o`, `claude-3-5-sonnet`) |
-| `OPENAI_API_KEY` | Required when `GOOSE_PROVIDER=openai` |
-| `ANTHROPIC_API_KEY` | Required when `GOOSE_PROVIDER=anthropic` |
+| `LLM_PROVIDER` | Provider: `openai` (default), `kimi`, `glm`, `siliconflow`, `azure` |
+| `LLM_API_KEY` | API key for the chosen provider (fallback when provider-specific key is absent) |
+| `LLM_MODEL` | Override the default model for the provider |
+| `LLM_BASE_URL` | Override the API base URL (any OpenAI-compatible provider) |
+| `OPENAI_API_KEY` | OpenAI API key (checked before `LLM_API_KEY` for `openai` provider) |
+| `KIMI_API_KEY` | Kimi (Moonshot) API key (checked before `LLM_API_KEY` for `kimi` provider) |
+| `GLM_API_KEY` | GLM (Zhipu AI) API key (checked before `LLM_API_KEY` for `glm` provider) |
+| `SILICONFLOW_API_KEY` | SiliconFlow API key (checked before `LLM_API_KEY` for `siliconflow` provider) |
+| `AZURE_OPENAI_API_KEY` | Azure OpenAI API key (required for `azure` provider) |
+| `AZURE_OPENAI_ENDPOINT` | Azure OpenAI endpoint URL (required for `azure` provider) |
+| `AZURE_OPENAI_DEPLOYMENT` | Azure deployment / model name (required for `azure` provider) |
+| `AZURE_OPENAI_API_VERSION` | Azure API version (default: `2024-02-01`) |
