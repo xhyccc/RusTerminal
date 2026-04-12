@@ -1,6 +1,6 @@
-use tauri::{AppHandle, Emitter};
-use std::process::{Command, Stdio};
 use std::io::{BufRead, BufReader};
+use std::process::{Command, Stdio};
+use tauri::{AppHandle, Emitter};
 
 // ---------------------------------------------------------------------------
 // YAML config
@@ -129,10 +129,13 @@ fn llm_env_for_goose() -> Vec<(String, String)> {
         env.push(("GOOSE_PROVIDER".to_string(), "azure".to_string()));
         // Inject Azure vars from config if not already in the environment.
         for (var, yaml) in [
-            ("AZURE_OPENAI_API_KEY",    cfg.llm.api_key.as_str()),
-            ("AZURE_OPENAI_ENDPOINT",   cfg.llm.azure.endpoint.as_str()),
+            ("AZURE_OPENAI_API_KEY", cfg.llm.api_key.as_str()),
+            ("AZURE_OPENAI_ENDPOINT", cfg.llm.azure.endpoint.as_str()),
             ("AZURE_OPENAI_DEPLOYMENT", cfg.llm.azure.deployment.as_str()),
-            ("AZURE_OPENAI_API_VERSION",cfg.llm.azure.api_version.as_str()),
+            (
+                "AZURE_OPENAI_API_VERSION",
+                cfg.llm.azure.api_version.as_str(),
+            ),
         ] {
             let val = resolve(var, yaml);
             if !val.is_empty() {
@@ -193,8 +196,7 @@ fn llm_env_for_goose() -> Vec<(String, String)> {
     }
 
     // Model: env var > config.yaml > provider default
-    let model = resolve("LLM_MODEL", &cfg.llm.model)
-        .or_if_empty(default_model.to_string());
+    let model = resolve("LLM_MODEL", &cfg.llm.model).or_if_empty(default_model.to_string());
     env.push(("GOOSE_MODEL".to_string(), model));
 
     env
@@ -209,7 +211,11 @@ trait OrIfEmpty {
 }
 impl OrIfEmpty for String {
     fn or_if_empty(self, fallback: String) -> String {
-        if self.is_empty() { fallback } else { self }
+        if self.is_empty() {
+            fallback
+        } else {
+            self
+        }
     }
 }
 
@@ -238,7 +244,14 @@ async fn run_with_goose(
     let params = format!("idea={idea}");
 
     let mut child = Command::new(&goose_bin)
-        .args(["run", "--recipe", recipe, "--params", &params, "--no-session"])
+        .args([
+            "run",
+            "--recipe",
+            recipe,
+            "--params",
+            &params,
+            "--no-session",
+        ])
         .envs(llm_env_for_goose())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -264,7 +277,12 @@ async fn run_with_python(app_handle: AppHandle, idea: String) -> Result<String, 
     };
 
     let mut child = Command::new(python_cmd)
-        .args(["python_agent/agent_loop.py", "--idea", &idea, "--force-python"])
+        .args([
+            "python_agent/agent_loop.py",
+            "--idea",
+            &idea,
+            "--force-python",
+        ])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -303,3 +321,261 @@ pub async fn run_agent(app_handle: AppHandle, idea: String) -> Result<String, St
     }
 }
 
+// ---------------------------------------------------------------------------
+// Unit tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use std::sync::Mutex;
+    use tempfile::NamedTempFile;
+
+    /// Serialise tests that mutate the process-global working directory.
+    static CWD_LOCK: Mutex<()> = Mutex::new(());
+
+    // ── OrIfEmpty ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_or_if_empty_uses_self_when_non_empty() {
+        assert_eq!(
+            "hello".to_string().or_if_empty("fallback".to_string()),
+            "hello"
+        );
+    }
+
+    #[test]
+    fn test_or_if_empty_uses_fallback_when_empty() {
+        assert_eq!(
+            "".to_string().or_if_empty("fallback".to_string()),
+            "fallback"
+        );
+    }
+
+    #[test]
+    fn test_or_if_empty_fallback_also_empty() {
+        assert_eq!("".to_string().or_if_empty("".to_string()), "");
+    }
+
+    // ── first_env ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_first_env_returns_none_when_no_vars_set() {
+        // Use an unlikely-to-be-set variable name.
+        std::env::remove_var("_TEST_RUSTTERM_NOEXIST_1");
+        std::env::remove_var("_TEST_RUSTTERM_NOEXIST_2");
+        let result = first_env(&["_TEST_RUSTTERM_NOEXIST_1", "_TEST_RUSTTERM_NOEXIST_2"]);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_first_env_returns_first_set_var() {
+        std::env::set_var("_TEST_RUSTTERM_A", "value_a");
+        std::env::set_var("_TEST_RUSTTERM_B", "value_b");
+
+        let result = first_env(&["_TEST_RUSTTERM_A", "_TEST_RUSTTERM_B"]);
+
+        std::env::remove_var("_TEST_RUSTTERM_A");
+        std::env::remove_var("_TEST_RUSTTERM_B");
+
+        assert_eq!(result, Some("value_a".to_string()));
+    }
+
+    #[test]
+    fn test_first_env_skips_empty_value() {
+        std::env::set_var("_TEST_RUSTTERM_EMPTY", "");
+        std::env::set_var("_TEST_RUSTTERM_NONEMPTY", "ok");
+
+        let result = first_env(&["_TEST_RUSTTERM_EMPTY", "_TEST_RUSTTERM_NONEMPTY"]);
+
+        std::env::remove_var("_TEST_RUSTTERM_EMPTY");
+        std::env::remove_var("_TEST_RUSTTERM_NONEMPTY");
+
+        assert_eq!(result, Some("ok".to_string()));
+    }
+
+    // ── load_app_config ──────────────────────────────────────────────────────
+
+    #[test]
+    fn test_load_app_config_returns_default_when_file_missing() {
+        let _lock = CWD_LOCK.lock().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let original = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&tmp).unwrap();
+
+        let cfg = load_app_config();
+
+        std::env::set_current_dir(original).unwrap();
+
+        assert!(cfg.llm.provider.is_empty());
+        assert!(cfg.llm.api_key.is_empty());
+    }
+
+    #[test]
+    fn test_load_app_config_reads_provider_and_key() {
+        let _lock = CWD_LOCK.lock().unwrap();
+        let mut f = NamedTempFile::new().unwrap();
+        writeln!(f, "llm:\n  provider: kimi\n  api_key: test-key-123").unwrap();
+
+        let tmp_dir = f.path().parent().unwrap().to_path_buf();
+        let config_path = tmp_dir.join("config.yaml");
+        std::fs::copy(f.path(), &config_path).unwrap();
+
+        let original = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&tmp_dir).unwrap();
+
+        let cfg = load_app_config();
+
+        std::env::set_current_dir(original).unwrap();
+        std::fs::remove_file(config_path).unwrap();
+
+        assert_eq!(cfg.llm.provider, "kimi");
+        assert_eq!(cfg.llm.api_key, "test-key-123");
+    }
+
+    // ── llm_env_for_goose ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_llm_env_for_goose_openai_default() {
+        let _lock = CWD_LOCK.lock().unwrap();
+        // Ensure no stray env vars interfere.
+        for v in &[
+            "LLM_PROVIDER",
+            "LLM_API_KEY",
+            "LLM_MODEL",
+            "LLM_BASE_URL",
+            "OPENAI_API_KEY",
+            "OPENAI_BASE_URL",
+            "GOOSE_MODEL",
+            "GOOSE_PROVIDER",
+        ] {
+            std::env::remove_var(v);
+        }
+
+        let tmp = tempfile::tempdir().unwrap();
+        let original = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&tmp).unwrap();
+
+        let env = llm_env_for_goose();
+
+        std::env::set_current_dir(original).unwrap();
+
+        let provider = env
+            .iter()
+            .find(|(k, _)| k == "GOOSE_PROVIDER")
+            .map(|(_, v)| v.as_str());
+        assert_eq!(provider, Some("openai"));
+
+        let model = env
+            .iter()
+            .find(|(k, _)| k == "GOOSE_MODEL")
+            .map(|(_, v)| v.as_str());
+        assert_eq!(model, Some("gpt-4o-mini"));
+    }
+
+    #[test]
+    fn test_llm_env_for_goose_kimi_provider() {
+        let _lock = CWD_LOCK.lock().unwrap();
+        std::env::set_var("LLM_PROVIDER", "kimi");
+        std::env::set_var("KIMI_API_KEY", "kimi-key-xyz");
+        for v in &[
+            "LLM_API_KEY",
+            "OPENAI_API_KEY",
+            "LLM_MODEL",
+            "LLM_BASE_URL",
+            "OPENAI_BASE_URL",
+            "GOOSE_PROVIDER",
+            "GOOSE_MODEL",
+        ] {
+            std::env::remove_var(v);
+        }
+
+        let tmp = tempfile::tempdir().unwrap();
+        let original = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&tmp).unwrap();
+
+        let env = llm_env_for_goose();
+
+        std::env::set_current_dir(original).unwrap();
+        std::env::remove_var("LLM_PROVIDER");
+        std::env::remove_var("KIMI_API_KEY");
+
+        let base = env
+            .iter()
+            .find(|(k, _)| k == "OPENAI_BASE_URL")
+            .map(|(_, v)| v.as_str());
+        assert_eq!(base, Some("https://api.moonshot.cn/v1"));
+
+        let key = env
+            .iter()
+            .find(|(k, _)| k == "OPENAI_API_KEY")
+            .map(|(_, v)| v.as_str());
+        assert_eq!(key, Some("kimi-key-xyz"));
+
+        let model = env
+            .iter()
+            .find(|(k, _)| k == "GOOSE_MODEL")
+            .map(|(_, v)| v.as_str());
+        assert_eq!(model, Some("moonshot-v1-8k"));
+    }
+
+    #[test]
+    fn test_llm_env_for_goose_azure_provider() {
+        let _lock = CWD_LOCK.lock().unwrap();
+        std::env::set_var("LLM_PROVIDER", "azure");
+        std::env::set_var("AZURE_OPENAI_API_KEY", "az-key");
+        std::env::set_var("AZURE_OPENAI_ENDPOINT", "https://my.openai.azure.com/");
+        for v in &[
+            "LLM_API_KEY",
+            "OPENAI_API_KEY",
+            "LLM_MODEL",
+            "LLM_BASE_URL",
+            "GOOSE_PROVIDER",
+            "GOOSE_MODEL",
+            "AZURE_OPENAI_DEPLOYMENT",
+            "AZURE_OPENAI_API_VERSION",
+        ] {
+            std::env::remove_var(v);
+        }
+
+        let tmp = tempfile::tempdir().unwrap();
+        let original = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&tmp).unwrap();
+
+        let env = llm_env_for_goose();
+
+        std::env::set_current_dir(original).unwrap();
+        std::env::remove_var("LLM_PROVIDER");
+        std::env::remove_var("AZURE_OPENAI_API_KEY");
+        std::env::remove_var("AZURE_OPENAI_ENDPOINT");
+
+        let provider = env
+            .iter()
+            .find(|(k, _)| k == "GOOSE_PROVIDER")
+            .map(|(_, v)| v.as_str());
+        assert_eq!(provider, Some("azure"));
+
+        // Azure path should NOT include OPENAI_BASE_URL
+        assert!(!env.iter().any(|(k, _)| k == "OPENAI_BASE_URL"));
+    }
+
+    // ── find_goose ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_find_goose_returns_option() {
+        // Just verify the function runs without panicking.  The return value
+        // depends on whether goose is installed in the CI environment.
+        let _result: Option<String> = find_goose();
+    }
+
+    // ── AzureConfig default ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_azure_config_default_is_empty() {
+        let cfg = AzureConfig::default();
+        assert!(cfg.endpoint.is_empty());
+        assert!(cfg.deployment.is_empty());
+        assert!(cfg.api_version.is_empty());
+    }
+}
