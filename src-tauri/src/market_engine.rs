@@ -220,7 +220,7 @@ mod tests {
     use std::sync::Mutex;
     use tempfile::NamedTempFile;
 
-    /// Serialise tests that mutate the process-global working directory.
+    /// Serialize tests that mutate the process-global working directory.
     static CWD_LOCK: Mutex<()> = Mutex::new(());
 
     // ── default_poll_interval ────────────────────────────────────────────────
