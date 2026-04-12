@@ -101,15 +101,13 @@ info "Installing npm packages …"
 npm install --silent
 ok "npm packages installed"
 
-# ── Step 5: Install Tauri CLI ─────────────────────────────────────────────────
+# ── Step 5: Check Tauri CLI (bundled via @tauri-apps/cli npm package) ────────
 info "Checking Tauri CLI …"
-if ! cargo tauri --version &>/dev/null 2>&1; then
-  info "Tauri CLI not found — installing (this takes a few minutes) …"
-  cargo install tauri-cli --version "^2" --locked
-  ok "Tauri CLI installed"
-else
-  ok "Tauri CLI $(cargo tauri --version)"
+TAURI_VERSION=$(node_modules/.bin/tauri --version 2>/dev/null || true)
+if [ -z "$TAURI_VERSION" ]; then
+  die "Tauri CLI not found in node_modules/.bin — ensure npm install succeeded."
 fi
+ok "Tauri CLI $TAURI_VERSION"
 
 # ── Step 6: Install Python packages ──────────────────────────────────────────
 info "Installing Python packages …"
